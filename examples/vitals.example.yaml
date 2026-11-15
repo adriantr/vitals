@@ -1,0 +1,210 @@
+# vitals.yaml for Acme, a fictional online shop on Google Cloud. Copy it and replace the names.
+#
+#   signals   PromQL queries with thresholds, evaluated at the end of the window
+#   services  what runs; each attaches signals and claims existing alerts by exact name
+#   systems   groups of services, with signals and claims of their own
+#
+# A service is as healthy as its worst signal or finding; a system as its worst service or own
+# signal. `vitals check` exits 1 when this file and the live estate disagree.
+# Every key is described in docs/configuration.md.
+defaultEnv: prod
+
+environments:
+  prod:
+    gcp:
+      project: acme-prod
+      # Projects whose alert policies count towards this environment. Defaults to [project].
+      alertProjects: [acme-prod, acme-shared]
+      region: europe-west1
+      errorLocations: [global, europe-west1]   # Error Reporting locations; regional log buckets report per region
+    # Optional: deploy workflow runs and releases.
+    github:
+      repo: acme/shop
+      branch: main
+      workflows: [deploy.yml]
+  staging:
+    gcp:
+      project: acme-staging
+      region: europe-west1
+
+thresholds:
+  flappingFires: 3
+  sloSlowBurn: 2
+  sloSevereBurn: 10
+  pubsubLagAmber: 30m
+  pubsubLagRed: 1h
+  deadLetterMatch: '.*(dlq|dead).*'
+  chronicAlertAge: 24h
+  chronicSignalDays: 2
+
+# {service}, {window}, {env} and {project} are filled in; any other {name} comes from the
+# attachment. An attachment can override amber and red. See docs/writing-signals.md.
+signals:
+  # --- every Cloud Run service (defaults) ---------------------------------------------------------
+  # `by: service_name` runs the query once for every service and hands each its own series.
+  cloud-run-5xx:
+    description: share of requests answered 5xx
+    promql: '(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",response_code_class="5xx"}[{window}])) or (0 * sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision"}[{window}])))) / sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision"}[{window}]))'
+    by: service_name
+    amber: 0.01
+    red: 0.05
+    unit: percent
+    noData: ok # no requests in the window
+  cloud-run-capacity-rejections:
+    description: share of requests Cloud Run answered 429 or 503, mostly "no available instance" at max scale
+    promql: '(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision",response_code=~"429|503"}[{window}])) or (0 * sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision"}[{window}])))) / sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision"}[{window}]))'
+    by: service_name
+    amber: 0.005
+    red: 0.05
+    unit: percent
+    noData: ok
+  cloud-run-memory:
+    description: p99 container memory utilization; services run out of memory well before anything else pages
+    promql: 'histogram_quantile(0.99, sum by (service_name, le) (rate(run_googleapis_com:container_memory_utilizations_bucket{monitored_resource="cloud_run_revision"}[{window}])))'
+    by: service_name
+    amber: 0.85
+    red: 0.95
+    unit: percent
+    noData: ok
+  cloud-run-liveness-failures:
+    description: worst 2-minute burst of failed liveness probes on one revision; a tight probe can kill healthy but busy instances
+    promql: 'max by (service_name) (max_over_time(sum by (service_name, revision_name) (increase(run_googleapis_com:container_completed_probe_attempt_count{monitored_resource="cloud_run_revision",probe_type="LIVENESS",is_healthy="false"}[2m]))[{window}:1m]))'
+    by: service_name
+    amber: 10
+    red: 20
+    noData: ok # no failed liveness probes
+  cloud-run-latency-regression:
+    description: p95 request latency against the same window a day earlier, when the service took at least 1 request a minute
+    promql: '(histogram_quantile(0.95, sum by (service_name, le) (rate(run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision"}[{window}]))) / histogram_quantile(0.95, sum by (service_name, le) (rate(run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision"}[{window}] offset 1d)))) and on (service_name) (sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision"}[{window}])) >= 1/60)'
+    by: service_name
+    amber: 2
+    red: 4
+    noData: ok # too little traffic
+
+  # --- Pub/Sub ------------------------------------------------------------------------------------
+  topic-publishing:
+    description: messages published in the window against the same window a week earlier
+    promql: '(sum(rate(pubsub_googleapis_com:topic_send_message_operation_count{monitored_resource="pubsub_topic",topic_id="{topic}"}[{window}])) or vector(0)) / sum(rate(pubsub_googleapis_com:topic_send_message_operation_count{monitored_resource="pubsub_topic",topic_id="{topic}"}[{window}] offset 7d))'
+    below: true
+    amber: 0.5
+    red: 0.1
+
+  # --- databases ----------------------------------------------------------------------------------
+  spanner-high-cpu:
+    description: high-priority CPU; Google recommends staying under 65% on a regional instance
+    promql: 'max(spanner_googleapis_com:instance_cpu_utilization_by_priority{instance_id="{instance}",priority="high"})'
+    amber: 0.45
+    red: 0.65
+    unit: percent
+  spanner-api-errors:
+    description: share of Spanner API calls that did not end OK (deadline exceeded, aborted, cancelled, ...)
+    promql: '(sum(rate(spanner_googleapis_com:api_request_count{monitored_resource="spanner_instance",instance_id="{instance}",status!="OK"}[{window}])) or vector(0)) / sum(rate(spanner_googleapis_com:api_request_count{monitored_resource="spanner_instance",instance_id="{instance}"}[{window}]))'
+    amber: 0.02
+    red: 0.1
+    unit: percent
+  cloud-sql-cpu:
+    promql: 'max(cloudsql_googleapis_com:database_cpu_utilization{database_id="{project}:{instance}"})'
+    amber: 0.7
+    red: 0.9
+    unit: percent
+
+  # --- batch and streaming ------------------------------------------------------------------------
+  dataflow-watermark:
+    description: data watermark age of streaming Dataflow jobs, worst job
+    promql: 'max(dataflow_googleapis_com:job_data_watermark_age{monitored_resource="dataflow_job"})'
+    amber: 600
+    red: 1800
+    unit: s
+    noData: ok # no streaming job running
+  dataflow-job-failures:
+    description: Dataflow jobs that failed in the last 24h
+    promql: 'count(max_over_time(dataflow_googleapis_com:job_is_failed{monitored_resource="dataflow_job"}[24h]) == 1)'
+    amber: 0.5
+    red: 2.5
+    noData: ok # none failed
+
+  # --- platform -----------------------------------------------------------------------------------
+  quota-exceeded:
+    description: requests rejected by a Google Cloud quota in the window
+    promql: 'sum(increase(serviceruntime_googleapis_com:quota_exceeded{monitored_resource="consumer_quota"}[{window}]))'
+    amber: 0.5
+    red: 50
+    noData: ok
+  uptime:
+    description: share of uptime checks passing for a host
+    promql: 'min(avg_over_time(monitoring_googleapis_com:uptime_check_check_passed{monitored_resource="uptime_url",host="{host}"}[{window}]))'
+    below: true
+    amber: 0.99
+    red: 0.9
+    unit: percent
+
+# Every service of a kind gets these. cloud-run is the default kind.
+defaults:
+  cloud-run:
+    signals: [cloud-run-5xx, cloud-run-capacity-rejections, cloud-run-memory, cloud-run-liveness-failures, cloud-run-latency-regression]
+
+services:
+  storefront:
+    description: the public web shop
+    otel: [storefront]                  # OTel service.name values, for per-service OTel metrics
+    dependsOn: [checkout, catalog]
+    signals: [{ use: uptime, host: shop.acme.example }]
+    alerts: ['Storefront offline']      # existing alert policies, by display name
+  checkout:
+    description: cart, payment and order placement API
+    otel: [checkout-api]
+    dependsOn: [orders-db, payments-provider]
+    signals:
+      - { use: cloud-run-5xx, amber: 0.005 }   # stricter than the default
+      - { use: topic-publishing, topic: orders }
+    sloServices: [checkout]             # Cloud Monitoring services holding SLOs
+  catalog:
+    description: product search and listing API
+    otel: [catalog-api]
+    dependsOn: [catalog-db]
+  order-worker:
+    description: consumes orders and talks to the warehouse
+    dependsOn: [orders-db]
+    subscriptions: [orders-worker, orders-worker-dlq]
+    errors: [order-worker]              # Error Reporting service names
+  search-indexer:
+    kind: dataflow                      # not Cloud Run: declared, not looked up in Cloud Run
+    description: streaming job that keeps the search index fresh
+
+systems:
+  shop:
+    description: everything a customer needs to buy
+    services: [storefront, checkout, catalog]
+  fulfilment:
+    description: order processing after checkout
+    services: [order-worker]
+    signals: [quota-exceeded]
+  search:
+    description: product search freshness
+    services: [search-indexer]
+    signals: [dataflow-watermark, dataflow-job-failures]
+  orders-db:
+    description: Spanner instance holding orders
+    signals:
+      - { use: spanner-high-cpu, instance: acme-orders }
+      - { use: spanner-api-errors, instance: acme-orders }
+  catalog-db:
+    description: Cloud SQL primary for the catalog
+    signals: [{ use: cloud-sql-cpu, instance: catalog-primary }]
+  payments-provider:
+    description: external payment gateway
+    alerts: ['Payment webhook failures']
+
+# Extra OTel metrics to show on component pages, after the built-in OpenTelemetry set.
+metrics:
+  - { label: checkout step latency (p95), type: workload.googleapis.com/checkout.step.duration, stat: p95, by: step, unit: ms }
+
+# Optional: read the repository to enrich component pages and let check/suggest find services
+# your deploy config ships but this file does not declare. See docs/configuration.md#topology.
+topology:
+  root: ..
+  vars: { env: prod }
+  services: { dir: infra/cloud-run, local: services }
+  manifests:
+    - services/*/deploy/prod.yaml
+  manifestEnv: { APP_MODE: mode }

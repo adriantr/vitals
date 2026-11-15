@@ -1,0 +1,7 @@
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "syntax"],
+  "triggerOnUpdates": true,
+  "ignorePatterns": "go.sum\nCHANGELOG.md\n**/testdata/**",
+  "instructions": "Review against AGENTS.md part 2. Flag: status compared with string literals instead of report.Status helpers; health that depends on the topology map; owners inferred from name patterns; failed reads that are swallowed instead of recorded on a report.Tracker; tests that touch the network; new YAML keys missing from docs/configuration.md; JSON shape changes without a snapshot.SchemaVersion bump."
+}

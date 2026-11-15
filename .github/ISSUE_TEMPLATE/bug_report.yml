@@ -1,0 +1,31 @@
+name: Bug report
+description: vitals printed something wrong, crashed, or exited with the wrong code
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `vitals version`
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      placeholder: vitals snapshot --since 6h
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: Paste the relevant part of the output. Remove project ids, service names and anything else you would not publish.
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Config excerpt
+      description: The smallest part of vitals.yaml that shows the problem, with names replaced.
+      render: yaml

@@ -1,0 +1,16 @@
+name: Feature or signal idea
+description: A new source, signal idea, command or output change
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What question about your system can vitals not answer today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What vitals should read or print. For a signal, include the PromQL if you have it.

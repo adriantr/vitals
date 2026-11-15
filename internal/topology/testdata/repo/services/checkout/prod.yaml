@@ -1,0 +1,24 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: checkout
+  annotations:
+    run.googleapis.com/ingress: internal
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "10"
+    spec:
+      serviceAccountName: checkout@acme-prod.iam.gserviceaccount.com
+      containers:
+        - name: app
+          image: europe-docker.pkg.dev/acme/shop/checkout:1.2.3
+          ports: [{ containerPort: 8080 }]
+          env:
+            - { name: OTEL_SERVICE_NAME, value: checkout-api }
+            - { name: APP_MODE, value: api }
+            - { name: PAYMENTS_URL, value: "https://payments.example.com/v1" }
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: db-password, key: latest } }
