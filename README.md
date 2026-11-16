@@ -9,6 +9,12 @@ agents first and people second. You describe your system once in a YAML file: th
 measure it, the services they attach to and the systems those services form. One `vitals snapshot`
 then prints what is wrong, where, since when and what changed, as compact Markdown.
 
+[![vitals snapshot in a terminal: one RED system, its findings, chronic issues and recent deploys](docs/assets/snapshot.png)](docs/assets/demo.mp4)
+
+*Click for the 75-second demo: snapshot, drill into a component, review a past window, check drift.*
+
+The same report as text:
+
 ```
 # System health — prod — RED
 window 2026-11-15 08:00Z → 2026-11-15 14:00Z · 1 red, 1 amber, 0 chronic
