@@ -22,6 +22,13 @@ func TestParse(t *testing.T) {
 	if !opts.at.Equal(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)) || !opts.slo || opts.since != 6*time.Hour {
 		t.Errorf("opts = %+v", opts)
 	}
+	opts, err = parse([]string{"explain", "--since", "2h", "signal:checkout/topic-publishing topic=orders", "--json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.ref != "signal:checkout/topic-publishing topic=orders" || opts.since != 2*time.Hour || !opts.json {
+		t.Errorf("opts = %+v", opts)
+	}
 	t.Setenv("VITALS_CONFIG", "/etc/vitals.yaml")
 	if opts, _ := parse([]string{"check"}); opts.config != "/etc/vitals.yaml" {
 		t.Errorf("config = %q, want $VITALS_CONFIG", opts.config)

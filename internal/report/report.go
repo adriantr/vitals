@@ -85,6 +85,26 @@ type Finding struct {
 	Chronic bool `json:"chronic,omitempty"`
 	// Pass to `vitals explain` to drill into this finding.
 	Ref Ref `json:"ref"`
+	// Newest log lines behind a breached signal that has a logs block, newest first.
+	Samples []LogSample `json:"samples,omitempty"`
+}
+
+// LogSample is one log line, cut to a single line of at most MaxSampleRunes.
+type LogSample struct {
+	At       time.Time `json:"timestamp"`
+	Severity string    `json:"severity,omitempty"`
+	Message  string    `json:"message"`
+}
+
+const MaxSampleRunes = 200
+
+// SampleLine is the Markdown for one sample, indented under its finding.
+func SampleLine(l LogSample) string {
+	severity := l.Severity
+	if severity == "" {
+		severity = "DEFAULT"
+	}
+	return fmt.Sprintf("  - `%s %s` %s", l.At.UTC().Format("2006-01-02 15:04:05Z"), severity, l.Message)
 }
 
 type ChangeKind string

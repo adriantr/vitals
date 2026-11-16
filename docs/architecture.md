@@ -39,7 +39,10 @@ classifies a failed read as BLOCKED (no credentials, or 401/403: a missing grant
 `func(ctx, Scope) report.Report`, and records its reads on a `report.Tracker`, so a failed read
 becomes a blind spot instead of disappearing. `signals.go` plans the PromQL (one query per
 attachment, or one per grouped `by:` signal), runs it, scores each value against its thresholds
-and re-runs breached queries on previous days for the chronic check. `monitoring.go` holds the
+and re-runs breached queries on previous days for the chronic check. `logs.go` reads Cloud Logging:
+the newest lines behind breached signals that have a `logs` block (at most 4 reads in flight, none
+when nothing breached), the project's log-based metrics for `check`, and Log Analytics patterns for
+`explain signal:`. `monitoring.go` holds the
 time-series helpers shared by the Cloud Run, Pub/Sub, SLO and OTel reads.
 
 **`internal/health`** decides who owns each finding (the service its data names, else the exact

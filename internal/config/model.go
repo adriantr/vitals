@@ -29,6 +29,30 @@ type Signal struct {
 	// By runs the signal once, grouped by this label; each service takes the series matching its name
 	// or OTel names. The query must not use {service}.
 	By string `yaml:"by"`
+	// Logs names the log lines behind the signal. They are sampled only when the signal breaches.
+	Logs *SignalLogs `yaml:"logs"`
+}
+
+// SignalLogs is a Cloud Logging filter whose newest lines are attached to a breached signal.
+type SignalLogs struct {
+	// A Logging query; {service}, {env}, {project} and attachment parameters are filled in. The
+	// window's time range is added by vitals.
+	Filter string `yaml:"filter"`
+	// How many lines to attach to a finding, 1 to 20. Defaults to 3.
+	Sample *int `yaml:"sample"`
+}
+
+const (
+	DefaultLogSample = 3
+	MaxLogSample     = 20
+)
+
+// SampleSize is the number of lines to attach, with the default applied.
+func (l SignalLogs) SampleSize() int {
+	if l.Sample == nil {
+		return DefaultLogSample
+	}
+	return *l.Sample
 }
 
 // SignalRef attaches a signal. In YAML it is either the signal's name or a map with `use` and the
@@ -179,10 +203,40 @@ var placeholder = regexp.MustCompile(`\{(\w+)\}`)
 
 var builtinParams = map[string]bool{"service": true, "window": true, "env": true, "project": true}
 
+var analyticsTable = regexp.MustCompile(`^[\w.:-]+\.\w+\.\w+$`)
+
+// A log filter gets its time range from vitals, so {window} has no meaning there.
+var logParams = map[string]bool{"service": true, "env": true, "project": true}
+
+func (l SignalLogs) validate(signal string) []string {
+	var problems []string
+	if strings.TrimSpace(l.Filter) == "" {
+		problems = append(problems, fmt.Sprintf("signal %s: logs.filter is required when logs is set", signal))
+	}
+	if strings.Contains(l.Filter, "{window}") {
+		problems = append(problems, fmt.Sprintf("signal %s: logs.filter must not use {window}; vitals adds the window's time range", signal))
+	}
+	if l.Sample != nil && (*l.Sample < 1 || *l.Sample > MaxLogSample) {
+		problems = append(problems, fmt.Sprintf("signal %s: logs.sample must be between 1 and %d", signal, MaxLogSample))
+	}
+	return problems
+}
+
 // Expand fills a signal's query; it fails when a placeholder has no value.
-func (sig Signal) Expand(values map[string]string) (string, error) {
+func (sig Signal) Expand(values map[string]string) (string, error) { return Fill(sig.PromQL, values) }
+
+// ExpandLogs fills a signal's log filter; "" when the signal has no logs block.
+func (sig Signal) ExpandLogs(values map[string]string) (string, error) {
+	if sig.Logs == nil {
+		return "", nil
+	}
+	return Fill(sig.Logs.Filter, values)
+}
+
+// Fill replaces every {name} in text; it fails when a placeholder has no value.
+func Fill(text string, values map[string]string) (string, error) {
 	var missing []string
-	out := placeholder.ReplaceAllStringFunc(sig.PromQL, func(m string) string {
+	out := placeholder.ReplaceAllStringFunc(text, func(m string) string {
 		key := m[1 : len(m)-1]
 		v, ok := values[key]
 		if !ok {
@@ -218,6 +272,9 @@ func (c *Config) validate() error {
 		if sig.NoData != "" && sig.NoData != "unknown" && sig.NoData != "ok" {
 			problems = append(problems, fmt.Sprintf("signal %s: noData must be unknown or ok", name))
 		}
+		if sig.Logs != nil {
+			problems = append(problems, sig.Logs.validate(name)...)
+		}
 	}
 	checkRefs := func(owner string, refs []SignalRef, isService bool) {
 		for _, ref := range refs {
@@ -226,12 +283,26 @@ func (c *Config) validate() error {
 				problems = append(problems, fmt.Sprintf("%s uses undefined signal %q", owner, ref.Use))
 				continue
 			}
+			given := func(key string) bool {
+				_, ok := ref.Params[key]
+				return ok && !ThresholdParam(key)
+			}
 			for _, m := range placeholder.FindAllStringSubmatch(sig.PromQL, -1) {
 				key := m[1]
-				if _, given := ref.Params[key]; (given && !ThresholdParam(key)) || (builtinParams[key] && (key != "service" || isService)) {
+				if given(key) || (builtinParams[key] && (key != "service" || isService)) {
 					continue
 				}
 				problems = append(problems, fmt.Sprintf("%s uses signal %s without a value for {%s}", owner, ref.Use, key))
+			}
+			if sig.Logs == nil {
+				continue
+			}
+			for _, m := range placeholder.FindAllStringSubmatch(sig.Logs.Filter, -1) {
+				key := m[1]
+				if given(key) || (logParams[key] && (key != "service" || isService)) {
+					continue
+				}
+				problems = append(problems, fmt.Sprintf("%s uses signal %s whose logs.filter has no value for {%s}", owner, ref.Use, key))
 			}
 		}
 	}
@@ -257,6 +328,14 @@ func (c *Config) validate() error {
 			if _, ok := c.Services[svc]; !ok {
 				problems = append(problems, fmt.Sprintf("system %s lists undeclared service %q", name, svc))
 			}
+		}
+	}
+	if view := c.Logs.AnalyticsView; view != "" {
+		filled, err := Fill(view, map[string]string{"env": "e", "project": "p"})
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("logs.analyticsView may only use {project} and {env}: %v", err))
+		} else if !analyticsTable.MatchString(filled) {
+			problems = append(problems, fmt.Sprintf("logs.analyticsView %q is not project.dataset.view", view))
 		}
 	}
 	if err := c.indexClaims(); err != nil {

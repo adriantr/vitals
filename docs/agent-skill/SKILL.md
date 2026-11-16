@@ -16,7 +16,7 @@ Code, `.claude/skills/system-health/SKILL.md`) and set `VITALS_CONFIG` to your c
 vitals snapshot                                    # whole system, last 6h
 vitals snapshot --slo                              # plus every SLO's burn rate (slower)
 vitals component <service>                         # one service in depth
-vitals explain '<ref>'                             # one finding: alert policy, SLO, error group, subscription, workflow
+vitals explain '<ref>'                             # one finding: alert policy, SLO, error group, subscription, workflow, signal
 vitals snapshot --since 3h --at 2026-11-13T21:00:00Z   # a past window
 vitals check                                       # model vs live estate; exit 1 on drift
 vitals suggest                                     # YAML stubs for the drift
@@ -31,7 +31,8 @@ Exit codes: 0 every source answered, 1 a source was BLOCKED, FAILED or SKIPPED (
    already there before the window; read them last.
 2. Run `component <service>` for each red or amber service. Check its dependencies' signals before
    blaming the service.
-3. Run `explain '<ref>'` for any finding you need in depth. Copy the ref exactly.
+3. Read the log lines indented under a signal finding first. Run `explain '<ref>'` for any finding
+   you need in depth, including `signal:` refs (query, series, up to 20 log lines). Copy the ref exactly.
 4. Compare when the problem started with Changes and the service's deploy time and commit.
 5. Report the status, the findings that matter, the likely cause, and any Blind spots by name.
 

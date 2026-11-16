@@ -14,14 +14,27 @@ import (
 )
 
 const (
-	maxAlerts = 20
-	maxEvents = 5
-	maxRuns   = 10
+	maxAlerts   = 20
+	maxEvents   = 5
+	maxRuns     = 10
+	maxLogLines = 20
+	maxPatterns = 10
+	maxSeries   = 20
 )
 
 type Explanation struct {
 	Lines  []string      `json:"lines"`
 	Report report.Report `json:"report"`
+	// The log reads of a signal explanation, when it made any.
+	Logs *report.Report `json:"logs,omitempty"`
+}
+
+// Reports lists every read the explanation made, for blind spots and the exit code.
+func (e Explanation) Reports() []report.Report {
+	if e.Logs == nil {
+		return []report.Report{e.Report}
+	}
+	return []report.Report{e.Report, *e.Logs}
 }
 
 func done(t *report.Tracker, lines []string) Explanation {
@@ -41,9 +54,11 @@ func Explain(ctx context.Context, s source.Scope, ref string) Explanation {
 		return subscription(ctx, s, target)
 	case report.RefWorkflow:
 		return workflow(ctx, s, target)
+	case report.RefSignal:
+		return signal(ctx, s, target)
 	default:
 		t := report.NewTracker("explain", s.Client)
-		return done(t, []string{fmt.Sprintf("No drill-down for %q. Known kinds: policy:, slo:, error:, pubsub:, workflow:.", ref)})
+		return done(t, []string{fmt.Sprintf("No drill-down for %q. Known kinds: policy:, slo:, error:, pubsub:, workflow:, signal:.", ref)})
 	}
 }
 

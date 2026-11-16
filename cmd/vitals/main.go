@@ -41,11 +41,11 @@ const usage = `usage:
   snapshot   every system and service at a glance: status, release, traffic, signals, findings, changes
   component  one service: declaration, release, signals, dependencies, metrics and findings
   check      compares the config with what is deployed and alerting; exits 1 on drift (for CI)
-  suggest    prints YAML stubs for undeclared services and unclaimed alert policies
+  suggest    prints YAML stubs for undeclared services, unclaimed alert policies and missing log metrics
   map        the static system map read from the repository (needs topology:; no cloud reads)
 
   <ref> is a finding's ref: policy:<display name>, slo:<service>/<slo>, error:<group id>,
-  pubsub:<subscription> or workflow:<file>.
+  pubsub:<subscription>, workflow:<file> or signal:<owner>/<signal> [k=v ...].
   --since takes 30m, 6h, 2d or any Go duration, up to 7d. --at (RFC 3339) ends the window
   in the past instead of now.
   --config defaults to $VITALS_CONFIG, then ./vitals.yaml.
@@ -224,7 +224,7 @@ func run(ctx context.Context, opts options, stdout, stderr io.Writer) (int, erro
 		return out.emit(data, strings.Join(append(lines, report.RenderBlindSpots(reports)...), "\n"), reports)
 	case "explain":
 		e := explain.Explain(ctx, scope, opts.ref)
-		reports := []report.Report{e.Report}
+		reports := e.Reports()
 		return out.emit(e, strings.Join(append(e.Lines, report.RenderBlindSpots(reports)...), "\n"), reports)
 	}
 	snap := snapshot.Build(ctx, scope, m, snapshot.Options{SLO: opts.slo})

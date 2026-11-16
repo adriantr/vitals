@@ -108,11 +108,12 @@ func level(sig config.Signal, v float64) report.Status {
 }
 
 // Signals evaluates every declared signal once per attachment, each at the end of the window.
-// Identical expanded queries run once.
-func Signals(ctx context.Context, s Scope) report.Report { return SignalsFor(ctx, s, nil) }
+// Identical expanded queries run once. Breached signals with a logs block get log samples.
+func Signals(ctx context.Context, s Scope) report.Report { return SignalsFor(ctx, s, nil, true) }
 
-// SignalsFor evaluates only the attachments of the given owners; nil means every owner.
-func SignalsFor(ctx context.Context, s Scope, owners []string) report.Report {
+// SignalsFor evaluates only the attachments of the given owners; nil means every owner. samples
+// reads the log lines of breached signals that have a logs block.
+func SignalsFor(ctx context.Context, s Scope, owners []string, samples bool) report.Report {
 	t := report.NewTracker("signals", s.Client)
 	jobs := planSignals(s, t, owners)
 	answers := runQueries(ctx, s, t, jobs, s.Window.End)
@@ -132,6 +133,9 @@ func SignalsFor(ctx context.Context, s Scope, owners []string) report.Report {
 		f := signalFinding(j, levels[i])
 		f.Chronic = chronic(j)
 		findings = append(findings, f)
+	}
+	if samples {
+		notes = append(notes, attachSamples(ctx, s, breached, findings)...)
 	}
 	return t.Report(len(jobs), "signal attachments", findings, nil, notes).WithValues(values)
 }
@@ -164,13 +168,35 @@ func chronicCheck(ctx context.Context, s Scope, breached []signalJob) (func(sign
 	return chronic, notes
 }
 
+// attachSamples reads the log lines of breached jobs into their findings (same order). Its reads
+// have their own tracker: a failed sample is a note and never changes a status or the exit code.
+func attachSamples(ctx context.Context, s Scope, breached []signalJob, findings []report.Finding) []string {
+	if !slices.ContainsFunc(breached, func(j signalJob) bool { return j.logFilter != "" }) {
+		return nil
+	}
+	t := report.NewTracker("log samples", s.Client)
+	lines := sampleLogs(ctx, s, t, breached)
+	for i, j := range breached {
+		if j.logFilter == "" {
+			continue
+		}
+		got := lines[j.logFilter]
+		findings[i].Samples = got[:min(len(got), j.sig.Logs.SampleSize())]
+	}
+	if problems := t.Problems(); len(problems) > 0 {
+		return []string{fmt.Sprintf("log samples incomplete, %d read(s) failed (statuses unaffected): %s", len(problems), problems[0])}
+	}
+	return nil
+}
+
 // signalJob is one attachment with its query expanded.
 type signalJob struct {
-	a      attachment
-	sig    config.Signal
-	query  string
-	params map[string]string // the attachment's parameters, expanded
-	err    error
+	a         attachment
+	sig       config.Signal
+	query     string
+	params    map[string]string // the attachment's parameters, expanded
+	logFilter string            // the logs block's filter, expanded; "" without one
+	err       error
 }
 
 type signalAnswer struct {
@@ -208,7 +234,11 @@ func planSignals(s Scope, t *report.Tracker, owners []string) []signalJob {
 			values[k], shown[k] = expanded, expanded
 		}
 		expanded, err := sig.Expand(values)
-		jobs = append(jobs, signalJob{a, sig, expanded, shown, err})
+		logFilter, logErr := sig.ExpandLogs(values)
+		if err == nil && logErr != nil {
+			err = fmt.Errorf("logs.filter: %w", logErr)
+		}
+		jobs = append(jobs, signalJob{a, sig, expanded, shown, logFilter, err})
 	}
 	return jobs
 }
@@ -286,3 +316,33 @@ func signalFinding(j signalJob, sv report.SignalValue) report.Finding {
 		Ref: report.NewRef(report.RefSignal, j.a.owner+"/"+strings.TrimSpace(j.a.ref.Use+" "+sv.Params)),
 	}
 }
+
+// SignalDetail is one attachment evaluated with every series it returned, for `explain signal:`.
+type SignalDetail struct {
+	Signal    config.Signal
+	Value     report.SignalValue
+	Series    []PromSeries
+	LogFilter string
+	IsService bool
+}
+
+// ExplainSignal evaluates the owner's attachment of a signal, picked by name and parameter text
+// (as a signal ref spells them). It returns false when the owner has no such attachment.
+func ExplainSignal(ctx context.Context, s Scope, t *report.Tracker, owner, name, params string) (SignalDetail, bool) {
+	for _, j := range planSignals(s, t, []string{owner}) {
+		if j.a.ref.Use != name || paramText(j.params) != params {
+			continue
+		}
+		answers := runQueries(ctx, s, t, []signalJob{j}, s.Window.End)
+		ans := answers[j.query]
+		series := ans.series
+		if j.sig.By != "" && ans.ok {
+			series = seriesFor(series, j.sig.By, keysFor(s.Config, j.a))
+		}
+		return SignalDetail{Signal: j.sig, Value: scoreSignal(s.Config, t, j, ans), Series: series, LogFilter: j.logFilter, IsService: j.a.isService}, true
+	}
+	return SignalDetail{}, false
+}
+
+// SeriesText prints a series' labels as k=v pairs.
+func SeriesText(p PromSeries) string { return labelText(p.Labels) }

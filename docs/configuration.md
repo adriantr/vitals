@@ -22,6 +22,7 @@ and fractions for `percent` (`0.05` is 5%).
 | `services` | map of name → [service](#services) | | What runs. |
 | `systems` | map of name → [system](#systems) | | Groups of services, plus things that are not services (databases, vendors). |
 | `metrics` | list of [metric](#metrics) | | Extra OTel metrics on component pages. |
+| `logs` | [logs](#logs) | | Optional. Where `explain signal:` reads log patterns from. |
 | `topology` | [topology](#topology) | | Optional repository map. |
 
 A name cannot be both a service and a system.
@@ -84,6 +85,19 @@ signals:
 | `unit` | `ms`, `s`, `percent`, `bytes`, `count` | | How values are printed. |
 | `noData` | `unknown`, `ok` | `unknown` | What an empty result means. Use `ok` for queries that return nothing when nothing failed. |
 | `by` | label name | | Run the query once, grouped by this label; each service takes the series matching its name or one of its `otel` names. The query must not use `{service}`. |
+| `logs` | object | | Optional. Log lines to attach when the signal breaches. |
+| `logs.filter` | Logging query | required with `logs` | The lines behind the signal. vitals adds the window's time range. |
+| `logs.sample` | int, 1 to 20 | `3` | How many of the newest matching lines to attach to the finding. |
+
+**Log samples.** When a signal with `logs` is amber or red, vitals makes one Cloud Logging
+`entries:list` call per breached attachment over the window (the replay window under `--at`) and
+attaches the newest `logs.sample` lines to the finding as `samples`. A healthy signal costs no
+Logging read. At most 4 reads run at once, to stay inside Logging's read quota. A failed read is a
+note on the signals source; it never changes a status or the exit code. `vitals explain
+signal:<owner>/<signal>` prints up to 20 lines.
+
+`logs.filter` takes `{service}` (services only), `{env}`, `{project}` and the attachment's
+parameters. `{window}` is rejected, and so is any other placeholder an attachment does not set.
 
 When a query returns several series, the worst one counts and the finding names it.
 
@@ -164,6 +178,17 @@ systems:
 | `alerts`, `sloServices`, `errors`, `subscriptions` | lists | Claims, as for services. |
 
 A system's status is the worst of its services, its own signals and its own findings.
+
+## Logs
+
+```yaml
+logs:
+  analyticsView: '{project}.logs_linked._AllLogs'
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `analyticsView` | `project.dataset.view` | | A Log Analytics view, through the log bucket's linked BigQuery dataset. `{project}` and `{env}` are filled in. When set, `explain signal:` on a Cloud Run service adds the service's top warning and error message patterns in the window. |
 
 ## Metrics
 

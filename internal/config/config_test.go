@@ -76,18 +76,28 @@ services:
 func TestInvalidConfigs(t *testing.T) {
 	base := "environments: { prod: { gcp: { project: p } } }\n"
 	cases := map[string]struct{ yaml, want string }{
-		"misspelt key":        {base + "servises: {}\n", "servises"},
-		"no environments":     {"services: {}\n", "no environments"},
-		"undefined signal":    {base + "services: { web: { signals: [nope] } }\n", `undefined signal "nope"`},
-		"missing parameter":   {base + "signals: { s: { promql: 'x{t=\"{topic}\"}' } }\nservices: { web: { signals: [s] } }\n", "{topic}"},
-		"service on a system": {base + "signals: { s: { promql: 'x{s=\"{service}\"}' } }\nsystems: { db: { signals: [s] } }\n", "{service}"},
-		"by with service":     {base + "signals: { s: { by: service_name, promql: 'x{s=\"{service}\"}' } }\n", "must not use {service}"},
-		"bad noData":          {base + "signals: { s: { promql: x, noData: maybe } }\n", "noData"},
-		"double claim":        {base + "services: { a: { alerts: [X] }, b: { alerts: [X] } }\n", "claimed by both"},
-		"unknown dependency":  {base + "services: { a: { dependsOn: [ghost] } }\n", `undeclared "ghost"`},
-		"unknown member":      {base + "systems: { s: { services: [ghost] } }\n", `undeclared service "ghost"`},
-		"name clash":          {base + "services: { a: {} }\nsystems: { a: {} }\n", "both a service and a system"},
-		"bad dead-letter re":  {base + "thresholds: { deadLetterMatch: '(' }\n", "deadLetterMatch"},
+		"misspelt key":            {base + "servises: {}\n", "servises"},
+		"no environments":         {"services: {}\n", "no environments"},
+		"undefined signal":        {base + "services: { web: { signals: [nope] } }\n", `undefined signal "nope"`},
+		"missing parameter":       {base + "signals: { s: { promql: 'x{t=\"{topic}\"}' } }\nservices: { web: { signals: [s] } }\n", "{topic}"},
+		"service on a system":     {base + "signals: { s: { promql: 'x{s=\"{service}\"}' } }\nsystems: { db: { signals: [s] } }\n", "{service}"},
+		"by with service":         {base + "signals: { s: { by: service_name, promql: 'x{s=\"{service}\"}' } }\n", "must not use {service}"},
+		"bad noData":              {base + "signals: { s: { promql: x, noData: maybe } }\n", "noData"},
+		"double claim":            {base + "services: { a: { alerts: [X] }, b: { alerts: [X] } }\n", "claimed by both"},
+		"unknown dependency":      {base + "services: { a: { dependsOn: [ghost] } }\n", `undeclared "ghost"`},
+		"unknown member":          {base + "systems: { s: { services: [ghost] } }\n", `undeclared service "ghost"`},
+		"name clash":              {base + "services: { a: {} }\nsystems: { a: {} }\n", "both a service and a system"},
+		"bad dead-letter re":      {base + "thresholds: { deadLetterMatch: '(' }\n", "deadLetterMatch"},
+		"logs without filter":     {base + "signals: { s: { promql: x, logs: { sample: 2 } } }\n", "logs.filter is required"},
+		"logs sample zero":        {base + "signals: { s: { promql: x, logs: { filter: f, sample: 0 } } }\n", "logs.sample must be between 1 and 20"},
+		"logs sample too big":     {base + "signals: { s: { promql: x, logs: { filter: f, sample: 21 } } }\n", "logs.sample must be between 1 and 20"},
+		"logs with window":        {base + "signals: { s: { promql: x, logs: { filter: 'a AND {window}' } } }\n", "must not use {window}"},
+		"logs unknown param":      {base + "signals: { s: { promql: x, logs: { filter: 'labels.k=\"{kind}\"' } } }\nservices: { web: { signals: [s] } }\n", "logs.filter has no value for {kind}"},
+		"logs param is threshold": {base + "signals: { s: { promql: x, logs: { filter: 'x>{amber}' } } }\nservices: { web: { signals: [{ use: s, amber: 1 }] } }\n", "logs.filter has no value for {amber}"},
+		"logs service on system":  {base + "signals: { s: { promql: x, logs: { filter: 'svc=\"{service}\"' } } }\nsystems: { db: { signals: [s] } }\n", "logs.filter has no value for {service}"},
+		"logs unknown key":        {base + "signals: { s: { promql: x, logs: { filter: f, lines: 3 } } }\n", "lines"},
+		"analytics placeholder":   {base + "logs: { analyticsView: '{team}.ds.v' }\n", "logs.analyticsView may only use"},
+		"analytics shape":         {base + "logs: { analyticsView: 'just-a-view' }\n", "not project.dataset.view"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -107,6 +117,41 @@ func TestExpand(t *testing.T) {
 	}
 	if _, err := sig.Expand(map[string]string{"service": "web"}); err == nil {
 		t.Error("Expand must fail on a missing placeholder")
+	}
+}
+
+func TestSignalLogs(t *testing.T) {
+	cfg := load(t, `
+environments: { prod: { gcp: { project: acme-prod } } }
+logs: { analyticsView: '{project}.logs_{env}._AllLogs' }
+signals:
+  timeouts:
+    promql: 'sum(logging_googleapis_com:user_timeouts{service_name="{service}"})'
+    logs: { filter: 'resource.labels.service_name="{service}" AND labels.topic="{topic}" AND logName:"{project}"' }
+  sampled:
+    promql: x
+    logs: { filter: f, sample: 20 }
+services:
+  web: { signals: [{ use: timeouts, topic: orders }, sampled] }
+`)
+	if got := cfg.Signals["timeouts"].Logs.SampleSize(); got != DefaultLogSample {
+		t.Errorf("default sample = %d, want %d", got, DefaultLogSample)
+	}
+	if got := cfg.Signals["sampled"].Logs.SampleSize(); got != 20 {
+		t.Errorf("sample = %d, want 20", got)
+	}
+	got, err := cfg.Signals["timeouts"].ExpandLogs(map[string]string{"service": "web", "topic": "orders", "project": "acme-prod", "env": "prod"})
+	if want := `resource.labels.service_name="web" AND labels.topic="orders" AND logName:"acme-prod"`; err != nil || got != want {
+		t.Errorf("ExpandLogs = %q, %v; want %q", got, err, want)
+	}
+	if _, err := cfg.Signals["timeouts"].ExpandLogs(map[string]string{"service": "web"}); err == nil {
+		t.Error("ExpandLogs must fail on a missing placeholder")
+	}
+	if got, _ := (Signal{PromQL: "x"}).ExpandLogs(nil); got != "" {
+		t.Errorf("a signal without logs expands to %q, want empty", got)
+	}
+	if got := cfg.AnalyticsTable("prod", "acme-prod"); got != "acme-prod.logs_prod._AllLogs" {
+		t.Errorf("AnalyticsTable = %q", got)
 	}
 }
 
