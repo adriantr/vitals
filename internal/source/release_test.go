@@ -67,6 +67,22 @@ func TestLatestReleasesStopsAtThePageCap(t *testing.T) {
 	}
 }
 
+func TestLatestReleasesReadsPastAPageOfDrafts(t *testing.T) {
+	f := &fakeReleases{tag: func(i int) string { return fmt.Sprintf("api-v1.%d.0", 1000-i) }}
+	got := latestReleases(func(page int) ([]githubRelease, bool) {
+		list, ok := f.page(page)
+		if page == 1 {
+			for i := range list {
+				list[i].Draft = true
+			}
+		}
+		return list, ok
+	}, releaseNow.AddDate(0, 0, -90))
+	if f.reads != 3 || got["api"].Tag != "api-v1.900.0" {
+		t.Errorf("read %d pages, api = %q; want 3 pages and api-v1.900.0", f.reads, got["api"].Tag)
+	}
+}
+
 func TestLatestReleasesSkipsDraftsUntaggedAndOld(t *testing.T) {
 	list := []githubRelease{
 		{TagName: "api-v2.0.0", Draft: true, PublishedAt: releaseNow.Format(time.RFC3339)},

@@ -104,7 +104,7 @@ func LatestReleases(ctx context.Context, s Scope, t *report.Tracker) map[string]
 	return latestReleases(githubReleasePages(ctx, s, t), s.Window.End.AddDate(0, 0, -90))
 }
 
-// latestReleases stops at the first page that names no new component, or after maxPages. Stopping early
+// latestReleases stops at the first page whose releases name no new component, or after maxPages. Stopping early
 // is not a failure: a component whose newest release lies further back shows no release.
 func latestReleases(fetch releasePage, since time.Time) map[string]Release {
 	out := map[string]Release{}
@@ -113,19 +113,20 @@ func latestReleases(fetch releasePage, since time.Time) map[string]Release {
 		if !ok {
 			break
 		}
-		added := false
+		named, added := false, false
 		for _, r := range list {
 			i := strings.LastIndex(r.TagName, "-v")
 			at := parseTime(r.PublishedAt)
 			if r.Draft || i <= 0 || (at != nil && at.Before(since)) {
 				continue
 			}
+			named = true
 			if component := r.TagName[:i]; out[component].Tag == "" {
 				out[component] = Release{Tag: r.TagName, Date: at, URL: r.HTMLURL}
 				added = true
 			}
 		}
-		if !added || lastReleasePage(list, since) {
+		if named && !added || lastReleasePage(list, since) {
 			break
 		}
 	}
