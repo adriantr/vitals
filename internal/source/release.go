@@ -65,7 +65,8 @@ func githubReleasePages(ctx context.Context, s Scope, t *report.Tracker) release
 		var list []githubRelease
 		u := endpoint(fmt.Sprintf("https://api.github.com/repos/%s/releases", gh.Repo),
 			url.Values{"per_page": {strconv.Itoa(releasesPerPage)}, "page": {strconv.Itoa(page)}})
-		return list, t.JSON(ctx, "releases", u, nil, s.GitHub, &list)
+		ok := t.JSON(ctx, "releases", u, nil, s.GitHub, &list)
+		return list, ok
 	}
 }
 
