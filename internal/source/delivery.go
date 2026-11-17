@@ -91,7 +91,7 @@ func workflowFinding(ctx context.Context, s Scope, t *report.Tracker, workflow s
 
 func releases(ctx context.Context, s Scope, t *report.Tracker) []report.Change {
 	var out []report.Change
-	for _, r := range listReleases(ctx, s, t, s.Window.Start) {
+	for _, r := range listReleases(t, githubReleasePages(ctx, s, t), s.Window.Start) {
 		if at := parseTime(r.PublishedAt); at != nil && !at.Before(s.Window.Start) && !at.After(s.Window.End) {
 			out = append(out, report.Change{At: *at, Kind: report.Release, What: r.TagName})
 		}
