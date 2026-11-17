@@ -34,6 +34,9 @@ func findingLine(f Finding) string {
 		fmt.Fprintf(&b, " · `vitals component %s`", f.Owner)
 	}
 	fmt.Fprintf(&b, " · ref `%s`", f.Ref)
+	for _, l := range f.Samples {
+		b.WriteString("\n" + SampleLine(l))
+	}
 	return b.String()
 }
 

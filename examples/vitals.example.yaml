@@ -138,6 +138,19 @@ signals:
     red: 0.9
     unit: percent
 
+  # --- logs ---------------------------------------------------------------------------------------
+  # A log pattern becomes a signal through a log-based metric; see docs/writing-signals.md. The logs
+  # block attaches the newest matching lines to the finding when the signal breaches.
+  payment-timeouts:
+    description: payment provider calls that timed out, counted by the log-based metric payment_timeouts
+    promql: 'sum(increase(logging_googleapis_com:user_payment_timeouts{monitored_resource="cloud_run_revision",service_name="{service}"}[{window}]))'
+    amber: 0.5
+    red: 20
+    noData: ok # no timeouts logged
+    logs:
+      filter: 'resource.type="cloud_run_revision" AND resource.labels.service_name="{service}" AND textPayload:"payment provider timed out"'
+      sample: 3
+
 # Every service of a kind gets these. cloud-run is the default kind.
 defaults:
   cloud-run:
@@ -157,6 +170,7 @@ services:
     signals:
       - { use: cloud-run-5xx, amber: 0.005 }   # stricter than the default
       - { use: topic-publishing, topic: orders }
+      - payment-timeouts
     sloServices: [checkout]             # Cloud Monitoring services holding SLOs
   catalog:
     description: product search and listing API
@@ -194,6 +208,11 @@ systems:
   payments-provider:
     description: external payment gateway
     alerts: ['Payment webhook failures']
+
+# Optional: the Log Analytics view `vitals explain signal:` reads top message patterns from, as
+# project.dataset.view of the log bucket's linked BigQuery dataset.
+logs:
+  analyticsView: '{project}.logs_linked._AllLogs'
 
 # Extra OTel metrics to show on component pages, after the built-in OpenTelemetry set.
 metrics:

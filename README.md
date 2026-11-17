@@ -78,7 +78,7 @@ vitals component checkout
 
 | Piece | What it is |
 | --- | --- |
-| **signal** | A PromQL query with `amber` and `red` thresholds (or `below: true` for rates that must not drop), evaluated at the end of the window against Cloud Monitoring's PromQL API. `{service}`, `{window}`, `{env}` and `{project}` are filled in; other `{name}`s come from the attachment. |
+| **signal** | A PromQL query with `amber` and `red` thresholds (or `below: true` for rates that must not drop), evaluated at the end of the window against Cloud Monitoring's PromQL API. `{service}`, `{window}`, `{env}` and `{project}` are filled in; other `{name}`s come from the attachment. A log pattern becomes a signal through a log-based metric, and an optional `logs:` filter attaches the newest matching lines to the finding when it breaches. |
 | **service** | Something that runs. It attaches signals, claims existing alerts, SLO services, Error Reporting services and subscriptions by exact name, lists its OTel `service.name`s, and names what it `dependsOn`. Kind `cloud-run` (the default) also gets its deployed revision, commit and request metrics. |
 | **system** | A group of services, with signals and claims of its own: a database, a vendor, a pipeline. |
 | **defaults** | Signals every service of a kind gets, such as a 5xx ratio for every Cloud Run service. |
@@ -110,10 +110,10 @@ finding is listed as unowned.
 | --- | --- |
 | `vitals snapshot` | Systems and services with their status, then red, amber and chronic findings, deploys and releases, and blind spots. `--slo` adds every SLO's burn rate |
 | `vitals component <service>` | One service: declaration, release (revision, commit, latest release), signals, its dependencies' signals, Cloud Run and OTel metrics, findings |
-| `vitals explain <ref>` | One finding in depth. Refs look like `policy:<display name>`, `slo:<service>/<slo>`, `error:<group id>`, `pubsub:<subscription>` or `workflow:<file>` |
+| `vitals explain <ref>` | One finding in depth. Refs look like `policy:<display name>`, `slo:<service>/<slo>`, `error:<group id>`, `pubsub:<subscription>`, `workflow:<file>` or `signal:<owner>/<signal>` (query, value, thresholds, every series, and matching log lines) |
 | `vitals changes` | Deploys and releases in the window |
-| `vitals check` | Compares the config with the live estate and exits 1 on drift: undeclared Cloud Run services, declared ones that do not exist, alert policies nobody claims, claims that name nothing, signals that return no data. Run it in CI |
-| `vitals suggest` | YAML stubs for whatever `check` finds undeclared |
+| `vitals check` | Compares the config with the live estate and exits 1 on drift: undeclared Cloud Run services, declared ones that do not exist, alert policies nobody claims, claims that name nothing, log-based metrics that signals read but do not exist, signals that return no data. Run it in CI |
+| `vitals suggest` | YAML stubs for whatever `check` finds undeclared, and `gcloud logging metrics create` commands for missing log-based metrics |
 | `vitals map` | The repository map from the optional `topology:` section. No cloud reads |
 | `vitals version` | The version |
 
@@ -158,6 +158,11 @@ Google Cloud roles on the environment's project: `roles/monitoring.viewer`,
 `roles/errorreporting.viewer`, `roles/logging.viewer` and `roles/run.viewer`. On every other alert
 project: `roles/monitoring.viewer`. GitHub: read access to contents, Actions and releases. GitHub is
 optional; leave out `github:` and the delivery source only reads Cloud Run deploys.
+
+Log samples on breached signals and `explain signal:` log lines need `roles/logging.viewer` (already
+in the list above). The log patterns in `explain signal:` read a Log Analytics view through its linked
+BigQuery dataset, so they also need `roles/bigquery.jobUser` on the project and read access to that
+dataset (`roles/bigquery.dataViewer`, or `roles/logging.viewAccessor` on the view).
 
 A missing grant shows up as a BLOCKED source under Blind spots, with the API that refused.
 

@@ -101,11 +101,11 @@ func Build(ctx context.Context, s source.Scope, m *topology.Map, name string) (*
 		func() { slos = source.SLOsFor(ctx, s, sloServices) },
 		func() { errs = source.Errors(ctx, s) },
 		func() { pubsub = source.PubSub(ctx, s) },
-		func() { own = source.SignalsFor(ctx, s, []string{name}) },
+		func() { own = source.SignalsFor(ctx, s, []string{name}, true) },
 		func() {
 			// nil would mean every owner; a service without dependencies has no dependency signals.
 			if len(declared.DependsOn) > 0 {
-				deps = source.SignalsFor(ctx, s, declared.DependsOn)
+				deps = source.SignalsFor(ctx, s, declared.DependsOn, false)
 			}
 		},
 		func() { v.Metrics = source.OTelMetrics(ctx, s, metrics, v.otelNames(), source.MetricSpecs(cfg)) },
@@ -337,6 +337,9 @@ func Render(v *View) string {
 			level += " chronic"
 		}
 		lines = append(lines, fmt.Sprintf("- [%s %s] **%s** — %s · ref `%s`", level, f.Source, f.Title, f.Detail, f.Ref))
+		for _, l := range f.Samples {
+			lines = append(lines, report.SampleLine(l))
+		}
 	}
 	lines = append(lines, report.RenderBlindSpots(v.Reports)...)
 	return strings.Join(lines, "\n")

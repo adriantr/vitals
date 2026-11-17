@@ -12,7 +12,7 @@ import (
 )
 
 // SchemaVersion changes when the JSON shape of a snapshot does.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 type Options struct {
 	// SLO reads every SLO's burn rate, one Monitoring query each; burn-rate alert policies already

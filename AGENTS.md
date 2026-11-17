@@ -16,7 +16,7 @@ Part 2 is for agents that **change** this repository.
    `dependsOn` ("is it us or them?"), Cloud Run metrics beside the same window a day earlier, the
    deployed revision and commit, and its findings.
 3. **`vitals explain <ref>`** for a finding you need in depth: an alert policy's conditions and
-   incidents, an SLO, an error group, a subscription, a workflow run.
+   incidents, an SLO, an error group, a subscription, a workflow run, a signal with its log lines.
 4. Line the start of a problem up against **Changes** and the component's deploy time and commit.
    Findings on one service, or on a service and what it depends on, that start within minutes of
    each other are usually one incident.
@@ -26,8 +26,15 @@ For a past incident, add `--at <RFC 3339 end>` and a `--since` that covers it.
 ### Reading the output
 
 - **Refs.** Every finding ends with `` ref `kind:target` ``. Pass it to `vitals explain` as is, quoted:
-  `vitals explain 'policy:Checkout offline'`. Signal refs (`signal:...`) and service refs are
-  explained by `vitals component`, not `explain`.
+  `vitals explain 'policy:Checkout offline'`. A signal ref, such as
+  `vitals explain 'signal:checkout/payment-timeouts'`, prints the query, value, thresholds and every
+  series, then up to 20 matching log lines and, when `logs.analyticsView` is set, the service's top
+  warning and error patterns. Service refs go to `vitals component`.
+- **Samples.** A breached signal with a `logs` block carries its newest log lines, indented under the
+  finding in Markdown and as `samples` (`timestamp`, `severity`, `message`) in `--json`. Read them
+  before opening a log viewer; they are often the cause in one line. Run `explain signal:` only when
+  three lines are not enough. No samples on a finding means the signal has no `logs` block, or the
+  read failed (see Notes); it does not mean the logs are empty.
 - **Owner.** `[source · owner]` after the title. `unowned` means nothing in the config claims it;
   say so rather than guessing an owner.
 - **Blind spots.** A source that was BLOCKED (a permission is missing), FAILED or SKIPPED is listed

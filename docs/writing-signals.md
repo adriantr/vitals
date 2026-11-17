@@ -82,6 +82,50 @@ These catch failures that often get past alerting. All are in
 | Uptime check pass ratio | The outside view. `below: true`. |
 | Pub/Sub lag and dead letters | Built in: the `pubsub` source reads every subscription, no signal needed. |
 
+## Signals from logs
+
+A log line becomes a signal in two steps. Counting stays in PromQL, so a log signal gets the same
+grouped query, `--at` replay and chronic check as any other.
+
+1. **Count the lines with a log-based metric.** Cloud Monitoring exposes a user-defined log metric
+   `<name>` as `logging_googleapis_com:user_<name>` in PromQL, with every character other than letters,
+   digits and `_` turned into `_`.
+
+   ```bash
+   gcloud logging metrics create payment_timeouts \
+     --project=acme-prod \
+     --description='payment provider calls that timed out' \
+     --log-filter='resource.type="cloud_run_revision" AND textPayload:"payment provider timed out"'
+   ```
+
+2. **Write the signal, with a `logs` block for context.** The metric counts; the filter fetches the
+   lines when the signal breaches, so the finding carries the newest ones.
+
+   ```yaml
+   signals:
+     payment-timeouts:
+       description: payment provider calls that timed out
+       promql: 'sum(increase(logging_googleapis_com:user_payment_timeouts{monitored_resource="cloud_run_revision",service_name="{service}"}[{window}]))'
+       amber: 0.5
+       red: 20
+       noData: ok # no timeouts logged
+       logs:
+         filter: 'resource.type="cloud_run_revision" AND resource.labels.service_name="{service}" AND textPayload:"payment provider timed out"'
+         sample: 3
+   ```
+
+A breached finding then reads:
+
+```
+- **payment-timeouts** [signals · checkout] — payment-timeouts is 42, above the red threshold 20 — payment provider calls that timed out · `vitals component checkout` · ref `signal:checkout/payment-timeouts`
+  - `2026-03-04 11:58:01Z ERROR` payment provider timed out after 10s
+  - `2026-03-04 11:57:40Z ERROR` payment provider timed out after 10s
+```
+
+A log metric only counts lines written after it was created, so a new signal has no history.
+`vitals check` lists log metrics that a signal reads but the project does not have, and
+`vitals suggest` prints the `gcloud` command for each, taking the filter from `logs.filter`.
+
 ## Templates with parameters
 
 Any `{name}` that is not built in becomes a parameter each attachment must set, so one signal can

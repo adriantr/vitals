@@ -38,6 +38,8 @@ type Config struct {
 	Topology *topology.Config `yaml:"topology"`
 	// OTel metrics shown per component on top of the built-in OpenTelemetry semantic-convention set.
 	Metrics []MetricSpec `yaml:"metrics"`
+	// Optional: where `explain signal:` reads log patterns from.
+	Logs Logs `yaml:"logs"`
 	// Directory of the config file; topology.root is resolved against it.
 	Dir string `yaml:"-"`
 
@@ -82,6 +84,19 @@ type Thresholds struct {
 	// A breached signal is chronic when it also breaches at the window end on each of this many
 	// days before; 0 turns the check off.
 	ChronicSignalDays int `yaml:"chronicSignalDays"`
+}
+
+// Logs configures log reads beyond the per-signal samples.
+type Logs struct {
+	// BigQuery table of a Log Analytics view, through the log bucket's linked dataset, as
+	// project.dataset.view. {project} and {env} are filled in. Empty turns log patterns off.
+	AnalyticsView string `yaml:"analyticsView"`
+}
+
+// AnalyticsTable is the analytics view for one environment, or "" when none is configured.
+func (c *Config) AnalyticsTable(env string, project ProjectID) string {
+	out, _ := Fill(c.Logs.AnalyticsView, map[string]string{"env": env, "project": string(project)})
+	return out
 }
 
 // MetricSpec is one Cloud Monitoring metric read for a component, filtered to its OTel service names.
