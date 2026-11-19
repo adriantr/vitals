@@ -195,7 +195,8 @@ type JobRow struct {
 	System  string         `json:"system"`
 	Project string         `json:"project"`
 	Status  Status         `json:"status"`
-	// Cron expressions of the enabled Cloud Scheduler jobs that start it; empty for an on-demand job.
+	// The Cloud Scheduler jobs that start it, as cron and time zone, with the state when not
+	// enabled; empty for an on-demand job.
 	Schedules   []string   `json:"schedules"`
 	LastSuccess *time.Time `json:"lastSuccess,omitempty"`
 	LastFailure *time.Time `json:"lastFailure,omitempty"`

@@ -49,11 +49,15 @@ Each job is judged at the end of the window. Every finding is owned by the job a
 | **Job N failing** | red | The latest run that finished failed. It stays red until a run succeeds. `since` is the first failure of that streak. Cancelled runs are ignored. |
 | **Job N failed and recovered** | amber | More runs in the window failed than `tolerateFailures`, and a later run succeeded. |
 | **Scheduler S cannot start N** | red | An enabled scheduler's last attempt failed (a missing grant, a deleted job). Current window only. |
-| **Job N missed its scheduled run** | red | The newest scheduled time at least `grace` before the window end has no run that started or finished since. Paused schedulers are skipped, and so is this check while a scheduler of the job is failing, since that finding already says why. |
+| **Job N missed its scheduled run** | red | The newest scheduled time at least `grace` before the window end has no run that started or finished since. Current window only. Paused schedulers and scheduled times before the scheduler was created or last changed are skipped, and so is this check while a scheduler of the job is failing, since that finding already says why. |
 
 A run started counts when a run finished at or after the scheduled time, when Cloud Run created an
 execution at or after it, or when the scheduler's last successful attempt was at or after it. The last
-two describe now, so a past window (`--at`) relies on finished runs only.
+two describe now, and a run still going at a past window's end has not finished, so a past window
+(`--at`) judges finished runs only: failing and recovered, not missed runs or schedulers.
+
+When the run read fails, the job gets no findings and the read is listed under Blind spots: a gap
+in the data is not a failure. Two outcomes in one 5-minute period are read as failure then success.
 
 A failing streak or a missed run older than `chronicAlertAge` is chronic, like an old alert.
 
@@ -78,8 +82,9 @@ its system red the same way a failing service does.
 
 `vitals check` lists, and exits 1 on:
 
-- live Cloud Run jobs and workflows in the default project whose name matches `jobs.defaults.match`
-  and that are not declared (nothing, when `match` is unset);
+- live Cloud Run jobs and workflows whose name matches `jobs.defaults.match` and that are not
+  declared, in every project and region that runs a declared job and in the default project and
+  region (nothing, when `match` is unset);
 - declared jobs their project does not have;
 - schedulers that start a job the config does not declare, whatever its name.
 
@@ -90,9 +95,11 @@ its system red the same way a failing service does.
 Reads are batched per project and region, not per job: one Cloud Scheduler list, one Cloud Run jobs
 list (current window only) and one Monitoring query per kind for the finished runs, from
 `run.googleapis.com/job/completed_execution_count` and
-`workflows.googleapis.com/finished_execution_count`. Runs are read 8 days back so a failing job can
+`workflows.googleapis.com/finished_execution_count`, filtered to the job project so a metrics scope
+that also monitors other projects does not mix their runs in. Runs are read 8 days back so a failing job can
 name its last success. A job whose scheduled time is older than that (a weekly or monthly job) gets a
-second query for just those jobs, back to the scheduled time. `check` adds the workflows list.
+second query for just those jobs, back to the scheduled time. `check` lists jobs and workflows and
+reads no runs.
 
 ## IAM
 

@@ -160,7 +160,7 @@ func TestEvaluateJob(t *testing.T) {
 			}(),
 			live: true,
 		},
-		"past window ignores scheduler state and newest execution": {
+		"past window has no scheduler or missed-run findings": {
 			st: func() JobState {
 				s := jobState([]JobRun{run("2026-03-04T09:05:00Z", JobSucceeded)}, Schedule{
 					Name: "nightly-export-trigger", Cron: "0 * * * *", State: "ENABLED", LastAttempt: &lastAttempt, LastError: "boom",
@@ -169,7 +169,23 @@ func TestEvaluateJob(t *testing.T) {
 				s.LatestStart = &started
 				return s
 			}(),
-			want: []string{"red Job nightly-export missed its scheduled run"},
+		},
+		"scheduler changed after the due time is not missed": {
+			st: func() JobState {
+				sc := hourly()
+				updated := ts("2026-03-04T11:20:00Z")
+				sc.Updated = &updated
+				return jobState([]JobRun{run("2026-03-04T09:05:00Z", JobSucceeded)}, sc)
+			}(),
+			live: true,
+		},
+		"failed run read gives no findings": {
+			st: func() JobState {
+				s := jobState(nil, hourly())
+				s.RunsUnknown = true
+				return s
+			}(),
+			live: true,
 		},
 	}
 	for name, tc := range cases {

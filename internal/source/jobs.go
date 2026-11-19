@@ -49,8 +49,10 @@ type Schedule struct {
 	State       string     `json:"state"`
 	LastAttempt *time.Time `json:"lastAttempt,omitempty"`
 	// Why the last attempt failed; empty when it succeeded or never ran.
-	LastError string    `json:"lastError,omitempty"`
-	Target    JobTarget `json:"target"`
+	LastError string `json:"lastError,omitempty"`
+	// When the scheduler was created or last changed; scheduled times before it are not due.
+	Updated *time.Time `json:"updated,omitempty"`
+	Target  JobTarget  `json:"target"`
 }
 
 func (s Schedule) Enabled() bool { return s.State == "ENABLED" }
@@ -73,6 +75,8 @@ type JobState struct {
 	Lookback time.Time `json:"lookback"`
 	// When the newest Cloud Run execution was created, read for a current window only.
 	LatestStart *time.Time `json:"latestStart,omitempty"`
+	// The run read failed, so Runs says nothing; the failure is a blind spot.
+	RunsUnknown bool `json:"runsUnknown,omitempty"`
 }
 
 // JobEstate is everything read about jobs in one run.
@@ -118,8 +122,9 @@ type location struct {
 }
 
 // ReadJobs reads the schedules and finished runs of every declared job: per project and region one
-// Cloud Scheduler listing, and per kind one or two Monitoring queries. listAll also lists every
-// Cloud Run job and workflow, for check. only limits the jobs read; nil reads every declared job.
+// Cloud Scheduler listing, and per kind one or two Monitoring queries. listAll is for check: it
+// lists every Cloud Run job and workflow and reads no runs. only limits the jobs read; nil reads
+// every declared job.
 func ReadJobs(ctx context.Context, s Scope, t *report.Tracker, listAll bool, only []string) JobEstate {
 	var est JobEstate
 	jobs, err := s.Config.ResolveJobs(s.Env, s.Environment)
@@ -139,9 +144,13 @@ func ReadJobs(ctx context.Context, s Scope, t *report.Tracker, listAll bool, onl
 	for _, j := range jobs {
 		places[location{j.Project, j.Region}] = true
 	}
+	defaultRegion := s.Config.Jobs.Defaults.Region
+	if defaultRegion == "" {
+		defaultRegion = s.Environment.GCP.Region
+	}
 	for _, p := range projects {
 		if !slices.ContainsFunc(jobs, func(j config.ResolvedJob) bool { return j.Project == p }) {
-			places[location{p, s.Environment.GCP.Region}] = true
+			places[location{p, defaultRegion}] = true
 		}
 	}
 	locs := slices.SortedFunc(maps.Keys(places), func(a, b location) int {
@@ -175,7 +184,7 @@ func ReadJobs(ctx context.Context, s Scope, t *report.Tracker, listAll bool, onl
 		est.Schedules = append(est.Schedules, l.schedules...)
 		latestStart[locs[i]] = map[string]*time.Time{}
 		for _, j := range slices.Concat(l.run, l.workflows) {
-			latestStart[locs[i]][j.Name] = j.LatestStart
+			latestStart[locs[i]][string(j.Kind)+"/"+j.Name] = j.LatestStart
 			if est.Live != nil {
 				est.Live[j.Kind][jobKey(j.Project, j.Name)] = j
 			}
@@ -200,7 +209,7 @@ func ReadJobs(ctx context.Context, s Scope, t *report.Tracker, listAll bool, onl
 	for i, j := range jobs {
 		st := JobState{Job: j, Schedules: byJob[string(j.Kind)+"/"+jobKey(j.Project, j.Name)], Lookback: base}
 		if !historical {
-			st.LatestStart = latestStart[location{j.Project, j.Region}][j.Name]
+			st.LatestStart = latestStart[location{j.Project, j.Region}][string(j.Kind)+"/"+j.Name]
 		}
 		for _, sc := range st.Schedules {
 			due, ok, _ := LastDue(sc, end, j.Grace)
@@ -217,6 +226,9 @@ func ReadJobs(ctx context.Context, s Scope, t *report.Tracker, listAll bool, onl
 		}
 		est.States[i] = st
 	}
+	if listAll {
+		return est
+	}
 
 	reads := map[readKey]bool{}
 	for _, j := range jobs {
@@ -225,15 +237,20 @@ func ReadJobs(ctx context.Context, s Scope, t *report.Tracker, listAll bool, onl
 	keys := slices.SortedFunc(maps.Keys(reads), func(a, b readKey) int {
 		return strings.Compare(fmt.Sprint(a), fmt.Sprint(b))
 	})
-	type result struct{ base, deep map[string][]JobRun }
+	type result struct {
+		base, deep         map[string][]JobRun
+		baseOK, deepFailed bool
+	}
 	results := parallel(keys, func(k readKey) result {
 		var r result
 		tasks := []func(){func() {
-			r.base = jobRuns(ctx, s, t, k.loc, k.kind, nil, report.Window{Start: base, End: end})
+			r.base, r.baseOK = jobRuns(ctx, s, t, k.loc, k.kind, nil, report.Window{Start: base, End: end})
 		}}
 		if names := deep[k]; len(names) > 0 {
 			tasks = append(tasks, func() {
-				r.deep = jobRuns(ctx, s, t, k.loc, k.kind, names, report.Window{Start: deepFrom[k], End: base})
+				var ok bool
+				r.deep, ok = jobRuns(ctx, s, t, k.loc, k.kind, names, report.Window{Start: deepFrom[k], End: base})
+				r.deepFailed = !ok
 			})
 		}
 		Concurrently(tasks...)
@@ -246,12 +263,15 @@ func ReadJobs(ctx context.Context, s Scope, t *report.Tracker, listAll bool, onl
 	for i := range est.States {
 		j := est.States[i].Job
 		r := runs[readKey{location{j.Project, j.Region}, j.Kind}]
+		est.States[i].RunsUnknown = !r.baseOK || (r.deepFailed && slices.Contains(deep[readKey{location{j.Project, j.Region}, j.Kind}], j.Name))
 		all := append(slices.Clone(r.deep[j.Name]), r.base[j.Name]...)
 		slices.SortStableFunc(all, func(a, b JobRun) int {
 			if c := a.At.Compare(b.At); c != 0 {
 				return c
 			}
-			return strings.Compare(string(a.Outcome), string(b.Outcome))
+			// Order inside one period is unknown; a success is taken as the later, so a failure
+			// beside it reads as recovered (amber) rather than failing.
+			return outcomeOrder[a.Outcome] - outcomeOrder[b.Outcome]
 		})
 		// The two reads meet at base, where one period can come back from both.
 		est.States[i].Runs = slices.CompactFunc(all, func(a, b JobRun) bool { return a.At.Equal(b.At) && a.Outcome == b.Outcome })
@@ -263,6 +283,8 @@ func ReadJobs(ctx context.Context, s Scope, t *report.Tracker, listAll bool, onl
 	}
 	return est
 }
+
+var outcomeOrder = map[JobOutcome]int{JobCancelled: 0, JobFailed: 1, JobSucceeded: 2}
 
 func jobKey(project config.ProjectID, name string) string { return string(project) + "/" + name }
 
@@ -277,6 +299,7 @@ func listSchedules(ctx context.Context, s Scope, t *report.Tracker, l location) 
 			URI string `json:"uri"`
 		} `json:"httpTarget"`
 		LastAttemptTime string `json:"lastAttemptTime"`
+		UserUpdateTime  string `json:"userUpdateTime"`
 		Status          *struct {
 			Code    int    `json:"code"`
 			Message string `json:"message"`
@@ -302,7 +325,7 @@ func listSchedules(ctx context.Context, s Scope, t *report.Tracker, l location) 
 		}
 		sc := Schedule{
 			Name: p.Name[strings.LastIndex(p.Name, "/")+1:], Project: l.project, Cron: p.Schedule,
-			TimeZone: p.TimeZone, State: p.State, LastAttempt: parseTime(p.LastAttemptTime), Target: target,
+			TimeZone: p.TimeZone, State: p.State, LastAttempt: parseTime(p.LastAttemptTime), Updated: parseTime(p.UserUpdateTime), Target: target,
 		}
 		// A scheduler that never ran reports code -1 without an attempt time.
 		if sc.LastAttempt != nil && p.Status != nil && p.Status.Code != 0 {
@@ -375,10 +398,12 @@ var runMetrics = map[config.JobKind]struct{ resource, metric, nameLabel, outcome
 const runAlignment = 5 * time.Minute
 
 // jobRuns reads finished executions per job in one query: every job of the kind in the location,
-// or only names when given.
-func jobRuns(ctx context.Context, s Scope, t *report.Tracker, l location, kind config.JobKind, names []string, w report.Window) map[string][]JobRun {
+// or only names when given. ok is false when a read failed.
+func jobRuns(ctx context.Context, s Scope, t *report.Tracker, l location, kind config.JobKind, names []string, w report.Window) (map[string][]JobRun, bool) {
 	m := runMetrics[kind]
-	filter := fmt.Sprintf(`resource.type = %q AND metric.type = %q AND resource.labels.location = %q`, m.resource, m.metric, l.region)
+	// project_id keeps out same-named jobs of other projects in this project's metrics scope.
+	filter := fmt.Sprintf(`resource.type = %q AND metric.type = %q AND resource.labels.project_id = %q AND resource.labels.location = %q`,
+		m.resource, m.metric, l.project, l.region)
 	if len(names) > 0 {
 		filter += " AND " + OneOf("resource.labels."+m.nameLabel, names)
 	}
@@ -389,6 +414,7 @@ func jobRuns(ctx context.Context, s Scope, t *report.Tracker, l location, kind c
 		"aggregation.groupByFields":      {"resource.label." + m.nameLabel, "metric.label." + m.outcomeLabel},
 	}
 	title := fmt.Sprintf("%s %s runs in %s", l.project, kind, l.region)
+	ok := true
 	series := paged(t, title, func(token string) ([]timeSeries, string, bool) {
 		var page struct {
 			TimeSeries    []timeSeries `json:"timeSeries"`
@@ -398,8 +424,9 @@ func jobRuns(ctx context.Context, s Scope, t *report.Tracker, l location, kind c
 		if token != "" {
 			p.Set("pageToken", token)
 		}
-		ok := t.JSON(ctx, title, SeriesURL(string(l.project), filter, w, p), nil, s.Google, &page)
-		return page.TimeSeries, page.NextPageToken, ok
+		read := t.JSON(ctx, title, SeriesURL(string(l.project), filter, w, p), nil, s.Google, &page)
+		ok = ok && read
+		return page.TimeSeries, page.NextPageToken, read
 	})
 	out := map[string][]JobRun{}
 	for _, ts := range series {
@@ -411,5 +438,5 @@ func jobRuns(ctx context.Context, s Scope, t *report.Tracker, l location, kind c
 			}
 		}
 	}
-	return out
+	return out, ok
 }

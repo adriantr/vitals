@@ -55,6 +55,10 @@ type JobVerdict struct {
 func EvaluateJob(st JobState, w report.Window, chronicAge time.Duration, live bool) JobVerdict {
 	var v JobVerdict
 	j := st.Job
+	if st.RunsUnknown {
+		// Without runs neither a failure nor a missed run can be told apart from a gap in the read.
+		return v
+	}
 	var decided []JobRun
 	for _, r := range st.Runs {
 		if r.At.After(w.End) {
@@ -115,7 +119,9 @@ func EvaluateJob(st JobState, w report.Window, chronicAge time.Duration, live bo
 			}
 		}
 	}
-	if schedulerFailing {
+	// A past window cannot see a run that started before its end and finished after it: Cloud
+	// Scheduler and Cloud Run only describe now.
+	if schedulerFailing || !live {
 		return v
 	}
 	var missed *Schedule
@@ -125,7 +131,7 @@ func EvaluateJob(st JobState, w report.Window, chronicAge time.Duration, live bo
 			continue
 		}
 		due, ok, _ := LastDue(sc, w.End, j.Grace)
-		if !ok || startedSince(st, sc, due, live) {
+		if !ok || (sc.Updated != nil && due.Before(*sc.Updated)) || startedSince(st, sc, due) {
 			continue
 		}
 		if missed == nil || due.After(missedAt) {
@@ -144,12 +150,9 @@ func EvaluateJob(st JobState, w report.Window, chronicAge time.Duration, live bo
 }
 
 // startedSince reports whether anything shows a run of the job began at or after due.
-func startedSince(st JobState, sc Schedule, due time.Time, live bool) bool {
+func startedSince(st JobState, sc Schedule, due time.Time) bool {
 	if slices.ContainsFunc(st.Runs, func(r JobRun) bool { return !r.At.Before(due) }) {
 		return true
-	}
-	if !live {
-		return false
 	}
 	if st.LatestStart != nil && !st.LatestStart.Before(due) {
 		return true

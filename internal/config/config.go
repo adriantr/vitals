@@ -51,6 +51,8 @@ type Config struct {
 type Environment struct {
 	GCP    GCP     `yaml:"gcp"`
 	GitHub *GitHub `yaml:"github"`
+	// Values for placeholders in jobs.project and jobs logs.filter, beside {env} and {project}.
+	Vars map[string]string `yaml:"vars"`
 }
 
 type GCP struct {

@@ -99,7 +99,7 @@ func TestInvalidJobs(t *testing.T) {
 		"unknown system":     {"jobs: { declared: { a: { system: ghost } } }\n", `undeclared system "ghost"`},
 		"bad kind":           {"jobs: { declared: { a: { system: billing, kind: cron } } }\n", "kind must be cloud-run-job or workflow"},
 		"bad default kind":   {"jobs: { defaults: { kind: cron } }\n", "jobs.defaults: kind must be"},
-		"project param":      {"jobs: { defaults: { project: '{team}-batch' } }\n", "project may only use {env} and {project}"},
+		"project param":      {"jobs: { defaults: { project: '{team}-batch' } }\n", "project may only use {env}, {project} and vars"},
 		"negative grace":     {"jobs: { declared: { a: { system: billing, grace: -1m } } }\n", "grace must be between 0"},
 		"grace too long":     {"jobs: { declared: { a: { system: billing, grace: 200h } } }\n", "grace must be between 0"},
 		"negative tolerance": {"jobs: { declared: { a: { system: billing, tolerateFailures: -1 } } }\n", "tolerateFailures must not be negative"},
@@ -114,6 +114,49 @@ func TestInvalidJobs(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, err := Load(write(t, jobsBase+tc.yaml))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestJobVarsPerEnvironment(t *testing.T) {
+	cfg := load(t, `
+environments:
+  prod: { gcp: { project: acme-prod }, vars: { batchEnv: prod } }
+  staging: { gcp: { project: acme-staging }, vars: { batchEnv: dev } }
+systems: { billing: {} }
+jobs:
+  defaults: { project: 'acme-batch-{batchEnv}' }
+  declared:
+    nightly: { system: billing, logs: { filter: 'labels.tier="{batchEnv}" AND job="{job}"' } }
+`)
+	_, env, _ := cfg.Env("staging")
+	jobs, err := cfg.ResolveJobs("staging", env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jobs[0].Project != "acme-batch-dev" || jobs[0].LogFilter != `labels.tier="dev" AND job="nightly"` {
+		t.Errorf("vars not filled in: %+v", jobs[0])
+	}
+}
+
+func TestJobVarsMustBeInEveryEnvironment(t *testing.T) {
+	cases := map[string]struct{ yaml, want string }{
+		"var in one environment": {`
+environments:
+  prod: { gcp: { project: p }, vars: { batchEnv: prod } }
+  staging: { gcp: { project: s } }
+jobs: { defaults: { project: 'b-{batchEnv}' } }
+`, "not {batchEnv}"},
+		"reserved var": {`
+environments: { prod: { gcp: { project: p }, vars: { project: x } } }
+`, "vars must not set {project}"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(write(t, tc.yaml))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("err = %v, want it to mention %q", err, tc.want)
 			}

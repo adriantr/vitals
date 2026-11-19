@@ -141,8 +141,22 @@ func (c *Config) jobProject(template, env string, e Environment) (ProjectID, err
 	if template == "" {
 		return e.GCP.Project, nil
 	}
-	p, err := Fill(template, map[string]string{"env": env, "project": string(e.GCP.Project)})
+	p, err := Fill(template, jobValues(env, e, ""))
 	return ProjectID(p), err
+}
+
+// jobValues are the placeholder values of job templates: the environment's vars, {env},
+// {project} and, when job is set, {job}.
+func jobValues(env string, e Environment, job string) map[string]string {
+	values := maps.Clone(e.Vars)
+	if values == nil {
+		values = map[string]string{}
+	}
+	values["env"], values["project"] = env, string(e.GCP.Project)
+	if job != "" {
+		values["job"] = job
+	}
+	return values
 }
 
 func (c *Config) resolveJob(name, env string, e Environment) (ResolvedJob, error) {
@@ -183,25 +197,43 @@ func (c *Config) resolveJob(name, env string, e Environment) (ResolvedJob, error
 	if r.LogFilter == "" {
 		r.LogFilter = defaultJobLogFilters[r.Kind]
 	}
-	r.LogFilter, err = Fill(r.LogFilter, map[string]string{"job": name, "env": env, "project": string(project)})
+	values := jobValues(env, e, name)
+	values["project"] = string(project)
+	r.LogFilter, err = Fill(r.LogFilter, values)
 	if err != nil {
 		return ResolvedJob{}, fmt.Errorf("job %s: logs.filter: %w", name, err)
 	}
 	return r, nil
 }
 
-var jobPlaceholders = map[string]bool{"env": true, "project": true}
+var reservedJobPlaceholders = map[string]bool{"job": true, "env": true, "project": true}
 
-var jobLogPlaceholders = map[string]bool{"job": true, "env": true, "project": true}
+// jobVars are the environment vars every environment defines, so a template may use them.
+func (c *Config) jobVars() map[string]bool {
+	var common map[string]bool
+	for _, e := range c.Environments {
+		have := map[string]bool{}
+		for k := range e.Vars {
+			have[k] = common == nil || common[k]
+		}
+		common = have
+	}
+	for k, ok := range common {
+		if !ok {
+			delete(common, k)
+		}
+	}
+	return common
+}
 
-func (s JobSettings) validate(owner string) []string {
+func (s JobSettings) validate(owner string, vars map[string]bool) []string {
 	var problems []string
 	if s.Kind != "" && s.Kind != JobCloudRun && s.Kind != JobWorkflow {
 		problems = append(problems, fmt.Sprintf("%s: kind must be %s or %s", owner, JobCloudRun, JobWorkflow))
 	}
 	for _, m := range placeholder.FindAllStringSubmatch(s.Project, -1) {
-		if !jobPlaceholders[m[1]] {
-			problems = append(problems, fmt.Sprintf("%s: project may only use {env} and {project}, not {%s}", owner, m[1]))
+		if m[1] != "env" && m[1] != "project" && !vars[m[1]] {
+			problems = append(problems, fmt.Sprintf("%s: project may only use {env}, {project} and vars every environment defines, not {%s}", owner, m[1]))
 		}
 	}
 	if s.Grace != nil && (*s.Grace < 0 || *s.Grace > maxJobGrace) {
@@ -212,8 +244,8 @@ func (s JobSettings) validate(owner string) []string {
 	}
 	if s.Logs != nil {
 		for _, m := range placeholder.FindAllStringSubmatch(s.Logs.Filter, -1) {
-			if !jobLogPlaceholders[m[1]] {
-				problems = append(problems, fmt.Sprintf("%s: logs.filter may only use {job}, {env} and {project}, not {%s}", owner, m[1]))
+			if !reservedJobPlaceholders[m[1]] && !vars[m[1]] {
+				problems = append(problems, fmt.Sprintf("%s: logs.filter may only use {job}, {env}, {project} and vars every environment defines, not {%s}", owner, m[1]))
 			}
 		}
 		if s.Logs.Sample != nil && (*s.Logs.Sample < 1 || *s.Logs.Sample > MaxLogSample) {
@@ -224,7 +256,15 @@ func (s JobSettings) validate(owner string) []string {
 }
 
 func (c *Config) validateJobs() []string {
-	problems := c.Jobs.Defaults.validate("jobs.defaults")
+	vars := c.jobVars()
+	problems := c.Jobs.Defaults.validate("jobs.defaults", vars)
+	for name, e := range c.Environments {
+		for k := range e.Vars {
+			if reservedJobPlaceholders[k] {
+				problems = append(problems, fmt.Sprintf("environment %s: vars must not set {%s}, which vitals fills in", name, k))
+			}
+		}
+	}
 	if c.Jobs.Defaults.Match != "" {
 		if _, err := regexp.Compile(c.Jobs.Defaults.Match); err != nil {
 			problems = append(problems, fmt.Sprintf("jobs.defaults.match: %v", err))
@@ -232,7 +272,7 @@ func (c *Config) validateJobs() []string {
 	}
 	for name, j := range c.Jobs.Declared {
 		owner := "job " + name
-		problems = append(problems, j.validate(owner)...)
+		problems = append(problems, j.validate(owner, vars)...)
 		if j.System == "" {
 			problems = append(problems, owner+" has no system")
 		} else if _, ok := c.Systems[j.System]; !ok {
