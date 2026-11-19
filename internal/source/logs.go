@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/adriantr/vitals/internal/config"
 	"github.com/adriantr/vitals/internal/query"
 	"github.com/adriantr/vitals/internal/report"
 )
@@ -74,9 +75,14 @@ func WindowFilter(filter string, w report.Window) string {
 // LogLines reads the newest `limit` entries matching filter in the window, newest first: one
 // entries:list call.
 func LogLines(ctx context.Context, s Scope, t *report.Tracker, title, filter string, limit int) ([]report.LogSample, bool) {
+	return LogLinesIn(ctx, s, t, s.Environment.GCP.Project, s.Window, title, filter, limit)
+}
+
+// LogLinesIn is LogLines for another project and time range.
+func LogLinesIn(ctx context.Context, s Scope, t *report.Tracker, project config.ProjectID, w report.Window, title, filter string, limit int) ([]report.LogSample, bool) {
 	body := map[string]any{
-		"resourceNames": []string{"projects/" + string(s.Environment.GCP.Project)},
-		"filter":        WindowFilter(filter, s.Window),
+		"resourceNames": []string{"projects/" + string(project)},
+		"filter":        WindowFilter(filter, w),
 		"orderBy":       "timestamp desc",
 		"pageSize":      limit,
 	}

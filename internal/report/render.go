@@ -30,7 +30,7 @@ func findingLine(f Finding) string {
 		fmt.Fprintf(&b, " · since %s", Stamp(*f.Since))
 	}
 	fmt.Fprintf(&b, " — %s", f.Detail)
-	if f.OwnerIsService {
+	if f.OwnerIsService || f.OwnerIsJob {
 		fmt.Fprintf(&b, " · `vitals component %s`", f.Owner)
 	}
 	fmt.Fprintf(&b, " · ref `%s`", f.Ref)
@@ -87,7 +87,7 @@ func renderSystems(rows []SystemRow) []string {
 	if len(rows) == 0 {
 		return nil
 	}
-	lines := []string{"", fmt.Sprintf("## Systems (%d)", len(rows)), "| system | status | services | degraded services | own findings |", "| --- | --- | --- | --- | --- |"}
+	lines := []string{"", fmt.Sprintf("## Systems (%d)", len(rows)), "| system | status | services | jobs | degraded | own findings |", "| --- | --- | --- | --- | --- | --- |"}
 	for _, r := range rows {
 		degraded := strings.Join(r.Degraded, ", ")
 		if degraded == "" {
@@ -97,7 +97,7 @@ func renderSystems(rows []SystemRow) []string {
 		if r.Description != "" {
 			name += " — " + r.Description
 		}
-		lines = append(lines, fmt.Sprintf("| %s | %s | %d | %s | %d |", name, statusMark[r.Status], r.Services, degraded, r.Own))
+		lines = append(lines, fmt.Sprintf("| %s | %s | %d | %d | %s | %d |", name, statusMark[r.Status], r.Services, r.Jobs, degraded, r.Own))
 	}
 	return lines
 }
@@ -140,6 +140,51 @@ func renderServices(rows []ServiceRow) []string {
 	return lines
 }
 
+// renderJobs lists the jobs that are not ok; healthy jobs are only counted, since a pipeline
+// project easily declares a hundred.
+func renderJobs(rows []JobRow) []string {
+	if len(rows) == 0 {
+		return nil
+	}
+	var bad []JobRow
+	for _, r := range rows {
+		if r.Status != OK {
+			bad = append(bad, r)
+		}
+	}
+	title := fmt.Sprintf("## Jobs (%d declared, %d ok)", len(rows), len(rows)-len(bad))
+	if len(bad) == 0 {
+		return []string{"", title}
+	}
+	lines := []string{"", title, "| job | status | system | schedule | last success | last failure | runs (failed) in window | findings |", "| --- | --- | --- | --- | --- | --- | --- | --- |"}
+	for _, r := range bad {
+		schedule := strings.Join(r.Schedules, "; ")
+		if schedule == "" {
+			schedule = "on demand"
+		}
+		var findings []string
+		if r.Red > 0 {
+			findings = append(findings, fmt.Sprintf("%d red", r.Red))
+		}
+		if r.Amber > 0 {
+			findings = append(findings, fmt.Sprintf("%d amber", r.Amber))
+		}
+		if r.Chronic > 0 {
+			findings = append(findings, fmt.Sprintf("%d of them chronic", r.Chronic))
+		}
+		lines = append(lines, fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %d (%d) | %s |",
+			r.Name, statusMark[r.Status], r.System, schedule, stampOr(r.LastSuccess), stampOr(r.LastFailure), r.Runs, r.Failed, strings.Join(findings, ", ")))
+	}
+	return lines
+}
+
+func stampOr(t *time.Time) string {
+	if t == nil {
+		return "—"
+	}
+	return Stamp(*t)
+}
+
 func RenderSnapshot(s Snapshot) string {
 	var red, amber, chronic []string
 	for _, f := range s.Findings {
@@ -171,6 +216,7 @@ func RenderSnapshot(s Snapshot) string {
 	}
 	lines = append(lines, renderSystems(s.Systems)...)
 	lines = append(lines, renderServices(s.Services)...)
+	lines = append(lines, renderJobs(s.Jobs)...)
 	if s.Historical && len(s.Services) > 0 {
 		lines = append(lines, "", "_deployed and commit are blank for a past window; its deploys are under Changes_")
 	}

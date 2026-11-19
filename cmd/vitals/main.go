@@ -30,7 +30,7 @@ import (
 
 const usage = `usage:
   vitals snapshot [--since 6h] [--at TIME] [--slo] [--env NAME] [--json] [--config FILE]
-  vitals component <service> [--since 6h] [--at TIME] [--env NAME] [--json] [--config FILE]
+  vitals component <service|job> [--since 6h] [--at TIME] [--env NAME] [--json] [--config FILE]
   vitals check [--env NAME] [--config FILE]
   vitals suggest [--env NAME] [--config FILE]
   vitals map [--json] [--config FILE]
@@ -39,13 +39,14 @@ const usage = `usage:
   vitals version
 
   snapshot   every system and service at a glance: status, release, traffic, signals, findings, changes
-  component  one service: declaration, release, signals, dependencies, metrics and findings
+  component  one service: declaration, release, signals, dependencies, metrics and findings;
+             or one job: schedules, runs and findings
   check      compares the config with what is deployed and alerting; exits 1 on drift (for CI)
-  suggest    prints YAML stubs for undeclared services, unclaimed alert policies and missing log metrics
+  suggest    prints YAML stubs for undeclared services and jobs, unclaimed alert policies and missing log metrics
   map        the static system map read from the repository (needs topology:; no cloud reads)
 
   <ref> is a finding's ref: policy:<display name>, slo:<service>/<slo>, error:<group id>,
-  pubsub:<subscription>, workflow:<file> or signal:<owner>/<signal> [k=v ...].
+  pubsub:<subscription>, workflow:<file>, job:<name> or signal:<owner>/<signal> [k=v ...].
   --since takes 30m, 6h, 2d or any Go duration, up to 7d. --at (RFC 3339) ends the window
   in the past instead of now.
   --config defaults to $VITALS_CONFIG, then ./vitals.yaml.
@@ -211,6 +212,13 @@ func run(ctx context.Context, opts options, stdout, stderr io.Writer) (int, erro
 	case "suggest":
 		return drift.Suggest(ctx, scope, m, stdout)
 	case "component":
+		if cfg.IsJob(opts.ref) {
+			v, err := component.BuildJob(ctx, scope, opts.ref)
+			if err != nil {
+				return 2, err
+			}
+			return out.emit(v, component.RenderJob(v), v.Reports)
+		}
 		v, err := component.Build(ctx, scope, m, opts.ref)
 		if err != nil {
 			return 2, err

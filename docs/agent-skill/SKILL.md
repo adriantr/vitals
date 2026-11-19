@@ -16,6 +16,7 @@ Code, `.claude/skills/system-health/SKILL.md`) and set `VITALS_CONFIG` to your c
 vitals snapshot                                    # whole system, last 6h
 vitals snapshot --slo                              # plus every SLO's burn rate (slower)
 vitals component <service>                         # one service in depth
+vitals component <job>                             # one batch job: schedules, runs, failures
 vitals explain '<ref>'                             # one finding: alert policy, SLO, error group, subscription, workflow, signal
 vitals snapshot --since 3h --at 2026-11-13T21:00:00Z   # a past window
 vitals check                                       # model vs live estate; exit 1 on drift
@@ -29,7 +30,8 @@ Exit codes: 0 every source answered, 1 a source was BLOCKED, FAILED or SKIPPED (
 
 1. Run `snapshot` once. Read Systems, then Services, then Red and Amber. Chronic findings were
    already there before the window; read them last.
-2. Run `component <service>` for each red or amber service. Check its dependencies' signals before
+2. Run `component <service>` for each red or amber service, and `component <job>` for each red or
+   amber job. Check its dependencies' signals before
    blaming the service.
 3. Read the log lines indented under a signal finding first. Run `explain '<ref>'` for any finding
    you need in depth, including `signal:` refs (query, series, up to 20 log lines). Copy the ref exactly.

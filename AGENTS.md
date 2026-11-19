@@ -11,7 +11,8 @@ Part 2 is for agents that **change** this repository.
    with the services pulling each one down), then **Services**, then **Red** and **Amber**. The
    **Chronic** section holds things that were already broken before the window; they count in every
    status, but a fresh incident is in Red or Amber, so read those first.
-2. **`vitals component <service>`** for each red or amber service. Every finding owned by a service
+2. **`vitals component <service>`** for each red or amber service, and **`vitals component <job>`**
+   for each red or amber job in **Jobs**. Every finding owned by a service
    prints this command for you. The page shows the service's signals, the signals of what it
    `dependsOn` ("is it us or them?"), Cloud Run metrics beside the same window a day earlier, the
    deployed revision and commit, and its findings.
@@ -29,7 +30,7 @@ For a past incident, add `--at <RFC 3339 end>` and a `--since` that covers it.
   `vitals explain 'policy:Checkout offline'`. A signal ref, such as
   `vitals explain 'signal:checkout/payment-timeouts'`, prints the query, value, thresholds and every
   series, then up to 20 matching log lines and, when `logs.analyticsView` is set, the service's top
-  warning and error patterns. Service refs go to `vitals component`.
+  warning and error patterns. Service and job refs go to `vitals component`; a `job:` ref also works with `explain`.
 - **Samples.** A breached signal with a `logs` block carries its newest log lines, indented under the
   finding in Markdown and as `samples` (`timestamp`, `severity`, `message`) in `--json`. Read them
   before opening a log viewer; they are often the cause in one line. Run `explain signal:` only when

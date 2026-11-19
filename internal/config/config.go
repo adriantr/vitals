@@ -34,6 +34,8 @@ type Config struct {
 	Defaults map[ServiceKind]KindDefaults `yaml:"defaults"`
 	Services map[string]Service           `yaml:"services"`
 	Systems  map[string]System            `yaml:"systems"`
+	// Scheduled and on-demand Cloud Run jobs and workflows, each counting towards a system. See jobs.go.
+	Jobs Jobs `yaml:"jobs"`
 	// Optional: reads the repository to suggest and check service declarations.
 	Topology *topology.Config `yaml:"topology"`
 	// OTel metrics shown per component on top of the built-in OpenTelemetry semantic-convention set.

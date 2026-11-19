@@ -12,7 +12,7 @@ import (
 )
 
 // SchemaVersion changes when the JSON shape of a snapshot does.
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 type Options struct {
 	// SLO reads every SLO's burn rate, one Monitoring query each; burn-rate alert policies already
@@ -36,7 +36,13 @@ func Build(ctx context.Context, s source.Scope, m *topology.Map, opts Options) r
 	services := report.NewTracker("services", s.Client)
 	var run map[string]source.RunService
 	var golden map[string]*source.Golden
+	var jobs report.Report
+	var estate source.JobEstate
+	var verdicts []source.JobVerdict
 	tasks := []func(){func() { golden = source.GoldenSignals(ctx, s, services, s.Window, "") }}
+	if len(s.Config.Jobs.Declared) > 0 {
+		tasks = append(tasks, func() { jobs, estate, verdicts = source.JobHealth(ctx, s, nil) })
+	}
 	if !historical {
 		tasks = append(tasks, func() { run = source.ListRunServices(ctx, s, services) })
 	}
@@ -44,6 +50,9 @@ func Build(ctx context.Context, s source.Scope, m *topology.Map, opts Options) r
 		tasks = append(tasks, func() { reports[i] = collect(ctx, s) })
 	}
 	source.Concurrently(tasks...)
+	if len(s.Config.Jobs.Declared) > 0 {
+		reports = append(reports, jobs)
+	}
 
 	health.Resolve(reports, s.Config, m)
 	var findings []report.Finding
@@ -63,6 +72,10 @@ func Build(ctx context.Context, s source.Scope, m *topology.Map, opts Options) r
 	snap.SchemaVersion = SchemaVersion
 	snap.Historical = historical
 	snap.Services, snap.Systems, snap.Signals = rows, health.Systems(s.Config, findings, status), values
+	snap.Jobs = health.JobRows(estate, verdicts, status)
+	for _, row := range snap.Jobs {
+		snap.Overall = snap.Overall.Worse(row.Status)
+	}
 	for _, row := range rows {
 		snap.Overall = snap.Overall.Worse(row.Status)
 	}

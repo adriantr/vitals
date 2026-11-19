@@ -81,10 +81,11 @@ vitals component checkout
 | **signal** | A PromQL query with `amber` and `red` thresholds (or `below: true` for rates that must not drop), evaluated at the end of the window against Cloud Monitoring's PromQL API. `{service}`, `{window}`, `{env}` and `{project}` are filled in; other `{name}`s come from the attachment. A log pattern becomes a signal through a log-based metric, and an optional `logs:` filter attaches the newest matching lines to the finding when it breaches. |
 | **service** | Something that runs. It attaches signals, claims existing alerts, SLO services, Error Reporting services and subscriptions by exact name, lists its OTel `service.name`s, and names what it `dependsOn`. Kind `cloud-run` (the default) also gets its deployed revision, commit and request metrics. |
 | **system** | A group of services, with signals and claims of its own: a database, a vendor, a pipeline. |
+| **job** | A Cloud Run job or workflow that runs on a schedule or on demand. Its schedule is read from Cloud Scheduler; it is red when its latest run failed or it missed a scheduled run, and counts towards one system. See [docs/jobs.md](docs/jobs.md). |
 | **defaults** | Signals every service of a kind gets, such as a 5xx ratio for every Cloud Run service. |
 
 **Worst-of roll-up.** A service is as healthy as its worst signal or finding. A system is as healthy
-as its worst service, own signal or own finding. The status order is `ok` < `unknown` < `amber` <
+as its worst service, job, own signal or own finding. The status order is `ok` < `unknown` < `amber` <
 `red`, so a read that failed never shows as healthy. Nothing depends on alert policies existing:
 signals alone give a full picture.
 
@@ -103,6 +104,7 @@ finding is listed as unowned.
 | `errors` | Error Reporting group stats | | an error group first seen in the window |
 | `pubsub` | DLQ backlog and oldest unacked message per subscription | lag ≥ `pubsubLagRed` | any DLQ backlog, or lag ≥ `pubsubLagAmber` |
 | `delivery` | GitHub Actions runs and releases, Cloud Run deploys from the audit log | the latest deploy workflow run failed | one failed and a later run passed |
+| `jobs` | Cloud Scheduler, Cloud Run jobs, and finished runs of declared jobs | the latest run failed, a scheduler cannot start the job, or a scheduled run was missed | failed runs a later success recovered, past `tolerateFailures` |
 
 ## Commands
 
@@ -110,9 +112,10 @@ finding is listed as unowned.
 | --- | --- |
 | `vitals snapshot` | Systems and services with their status, then red, amber and chronic findings, deploys and releases, and blind spots. `--slo` adds every SLO's burn rate |
 | `vitals component <service>` | One service: declaration, release (revision, commit, latest release), signals, its dependencies' signals, Cloud Run and OTel metrics, findings |
-| `vitals explain <ref>` | One finding in depth. Refs look like `policy:<display name>`, `slo:<service>/<slo>`, `error:<group id>`, `pubsub:<subscription>`, `workflow:<file>` or `signal:<owner>/<signal>` (query, value, thresholds, every series, and matching log lines) |
+| `vitals component <job>` | One job: declaration, schedules with their last due time and attempt, runs, findings with log lines |
+| `vitals explain <ref>` | One finding in depth. Refs look like `policy:<display name>`, `slo:<service>/<slo>`, `error:<group id>`, `pubsub:<subscription>`, `workflow:<file>`, `job:<name>` or `signal:<owner>/<signal>` (query, value, thresholds, every series, and matching log lines) |
 | `vitals changes` | Deploys and releases in the window |
-| `vitals check` | Compares the config with the live estate and exits 1 on drift: undeclared Cloud Run services, declared ones that do not exist, alert policies nobody claims, claims that name nothing, log-based metrics that signals read but do not exist, signals that return no data. Run it in CI |
+| `vitals check` | Compares the config with the live estate and exits 1 on drift: undeclared Cloud Run services, declared ones that do not exist, alert policies nobody claims, claims that name nothing, log-based metrics that signals read but do not exist, signals that return no data, undeclared or missing jobs and schedulers that start an undeclared job. Run it in CI |
 | `vitals suggest` | YAML stubs for whatever `check` finds undeclared, and `gcloud logging metrics create` commands for missing log-based metrics |
 | `vitals map` | The repository map from the optional `topology:` section. No cloud reads |
 | `vitals version` | The version |
@@ -164,6 +167,10 @@ in the list above). The log patterns in `explain signal:` read a Log Analytics v
 BigQuery dataset, so they also need `roles/bigquery.jobUser` on the project and read access to that
 dataset (`roles/bigquery.dataViewer`, or `roles/logging.viewAccessor` on the view).
 
+Declared jobs need, on each job project, `roles/monitoring.viewer`, `roles/cloudscheduler.viewer`,
+`roles/run.viewer`, `roles/logging.viewer` and, for `check`, `roles/workflows.viewer`
+([docs/jobs.md](docs/jobs.md#iam)).
+
 A missing grant shows up as a BLOCKED source under Blind spots, with the API that refused.
 
 ## Repository map (optional)
@@ -191,6 +198,7 @@ what cannot be resolved stays as source text. Health never depends on it. See
 - [AGENTS.md](AGENTS.md): how an agent should use vitals, and how to contribute as one
 - [docs/configuration.md](docs/configuration.md): every YAML key
 - [docs/writing-signals.md](docs/writing-signals.md): PromQL for Cloud Monitoring, with examples
+- [docs/jobs.md](docs/jobs.md): scheduled and on-demand jobs, their checks and drift
 - [docs/architecture.md](docs/architecture.md): how the code fits together
 - [docs/agent-skill/SKILL.md](docs/agent-skill/SKILL.md): a skill to drop into your agent setup
 - [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md)

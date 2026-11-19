@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/hashicorp/hcl/v2 v2.23.0
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/zclconf/go-cty v1.13.0
 	golang.org/x/oauth2 v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
