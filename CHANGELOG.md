@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/adriantr/vitals/compare/v0.2.0...v0.3.0) (2026-11-19)
+
+
+### Features
+
+* declare scheduled and on-demand jobs and check their runs ([#6](https://github.com/adriantr/vitals/issues/6)) ([60ec91f](https://github.com/adriantr/vitals/commit/60ec91f1b26cdb9e6ef751dc3e8cf1099ed8e934))
+
 ## [0.2.0](https://github.com/adriantr/vitals/compare/v0.1.0...v0.2.0) (2026-11-17)
 
 
