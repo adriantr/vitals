@@ -27,6 +27,7 @@ type Drift struct {
 	unmappedServices   []string // repository services the config does not declare
 	silentSignals      []string // signal attachments whose query returned nothing
 	missingLogMetrics  []MissingLogMetric
+	jobs               jobDrift
 	live               map[string]source.RunService
 	tracker            *report.Tracker
 	signals            report.Report
@@ -114,6 +115,11 @@ func Find(ctx context.Context, s source.Scope, m *topology.Map) Drift {
 		func() { slos = source.ListSLOs(ctx, s, t) },
 		func() { d.signals = source.SignalsFor(ctx, s, nil, false) },
 	}
+	var jobs source.JobEstate
+	readJobs := len(cfg.Jobs.Declared) > 0 || cfg.Jobs.Defaults.Match != ""
+	if readJobs {
+		tasks = append(tasks, func() { jobs = source.ReadJobs(ctx, s, t, true, nil) })
+	}
 	// Listing log metrics costs a Logging read, so it happens only when a signal names one.
 	named := logMetricsNamed(cfg)
 	var logMetrics map[string]bool
@@ -171,6 +177,9 @@ func Find(ctx context.Context, s source.Scope, m *topology.Map) Drift {
 		}
 	}
 	d.missingLogMetrics = missingLogMetrics(s, named, logMetrics)
+	if readJobs {
+		d.jobs = findJobDrift(cfg, jobs)
+	}
 	for _, v := range d.signals.Values {
 		if v.Level == report.Unknown {
 			d.silentSignals = append(d.silentSignals, fmt.Sprintf("%s on %s", v.Signal, v.Owner))
@@ -206,6 +215,9 @@ func Check(ctx context.Context, s source.Scope, m *topology.Map, w io.Writer) (i
 		{"Claimed SLO services without SLOs", d.staleSLOServices, true},
 		{"Repository services the config does not declare", d.unmappedServices, true},
 		{"Log metrics named by signals that do not exist", logMetricItems(d.missingLogMetrics), true},
+		{"Jobs matching jobs.defaults.match the config does not declare", liveJobItems(d.jobs.undeclared), true},
+		{"Declared jobs that do not exist", d.jobs.missing, true},
+		{"Schedulers that start an undeclared job", d.jobs.unscheduled, true},
 		{"Signals whose query returned no data (warning)", d.silentSignals, false},
 	}
 	failing := 0
@@ -231,8 +243,8 @@ func Check(ctx context.Context, s source.Scope, m *topology.Map, w io.Writer) (i
 	if failing > 0 {
 		verdict = fmt.Sprintf("%d drift item(s); run `vitals suggest` for YAML stubs", failing)
 	}
-	header := fmt.Sprintf("# vitals check — %s — %s (%d services, %d systems, %d signals declared)",
-		s.Env, verdict, len(s.Config.Services), len(s.Config.Systems), len(slices.Collect(maps.Keys(s.Config.Signals))))
+	header := fmt.Sprintf("# vitals check — %s — %s (%d services, %d systems, %d jobs, %d signals declared)",
+		s.Env, verdict, len(s.Config.Services), len(s.Config.Systems), len(s.Config.Jobs.Declared), len(slices.Collect(maps.Keys(s.Config.Signals))))
 	if _, err := fmt.Fprintln(w, strings.Join(append([]string{header}, lines...), "\n")); err != nil {
 		return 1, err
 	}
@@ -282,6 +294,18 @@ func Suggest(ctx context.Context, s source.Scope, m *topology.Map, w io.Writer) 
 			}
 		}
 	}
+	if len(d.jobs.undeclared) > 0 {
+		lines = append(lines, "", "# Add under jobs.declared: (set each system; kind and project only where they differ from jobs.defaults)", "jobs:", "  declared:")
+		for _, j := range d.jobs.undeclared {
+			lines = append(lines, fmt.Sprintf("    %s: { kind: %s, system: <system> }", j.Name, j.Kind))
+		}
+	}
+	if len(d.jobs.unscheduled) > 0 {
+		lines = append(lines, "", "# Schedulers that start an undeclared job: declare the job, or widen jobs.defaults.match to list it")
+		for _, u := range d.jobs.unscheduled {
+			lines = append(lines, "#   "+u)
+		}
+	}
 	if len(d.unclaimedAlerts) > 0 {
 		lines = append(lines, "", "# Enabled alert policies nobody claims: add each under the owning service's or system's alerts:")
 		for _, a := range d.unclaimedAlerts {
@@ -303,7 +327,7 @@ func Suggest(ctx context.Context, s source.Scope, m *topology.Map, w io.Writer) 
 			lines = append(lines, "#   "+p)
 		}
 	} else if len(lines) == 0 {
-		lines = []string{"# nothing to suggest: every Cloud Run service is declared, every enabled alert policy is claimed and every log metric a signal reads exists"}
+		lines = []string{"# nothing to suggest: every Cloud Run service is declared, every enabled alert policy is claimed, every log metric a signal reads exists and every matching job is declared"}
 	}
 	if _, err := fmt.Fprintln(w, strings.Join(lines, "\n")); err != nil {
 		return 1, err

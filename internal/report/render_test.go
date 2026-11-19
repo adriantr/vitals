@@ -44,3 +44,32 @@ func TestSamplesInJSON(t *testing.T) {
 		t.Errorf("a finding without samples must leave the key out: %s", raw)
 	}
 }
+
+func TestSnapshotListsOnlyJobsThatAreNotOK(t *testing.T) {
+	failed := time.Date(2026, 3, 4, 2, 0, 0, 0, time.UTC)
+	out := RenderSnapshot(Snapshot{Env: "prod", Overall: Red, Jobs: []JobRow{
+		{Name: "nightly-export", System: "billing", Status: Red, Schedules: []string{"0 2 * * *"}, LastFailure: &failed, Runs: 1, Failed: 1, Red: 1},
+		{Name: "reindex", System: "search", Status: OK, Runs: 4},
+		{Name: "backfill", System: "search", Status: Amber, Runs: 3, Failed: 1, Amber: 1},
+	}})
+	for _, want := range []string{
+		"## Jobs (3 declared, 1 ok)",
+		"| nightly-export | RED | billing | 0 2 * * * | — | 2026-03-04 02:00Z | 1 (1) | 1 red |",
+		"| backfill | amber | search | on demand | — | — | 3 (1) | 1 amber |",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("snapshot lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "| reindex |") {
+		t.Error("a healthy job must only be counted")
+	}
+}
+
+func TestJobFindingPointsAtItsPage(t *testing.T) {
+	f := Finding{Level: Red, Source: "jobs", Title: "Job nightly-export failing", Owner: "nightly-export", OwnerIsJob: true,
+		Detail: "latest run failed", Ref: NewRef(RefJob, "nightly-export")}
+	if got := findingLine(f); !strings.Contains(got, "`vitals component nightly-export` · ref `job:nightly-export`") {
+		t.Errorf("finding line = %s", got)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/adriantr/vitals/internal/component"
 	"github.com/adriantr/vitals/internal/config"
 	"github.com/adriantr/vitals/internal/report"
 	"github.com/adriantr/vitals/internal/source"
@@ -56,9 +57,11 @@ func Explain(ctx context.Context, s source.Scope, ref string) Explanation {
 		return workflow(ctx, s, target)
 	case report.RefSignal:
 		return signal(ctx, s, target)
+	case report.RefJob:
+		return job(ctx, s, target)
 	default:
 		t := report.NewTracker("explain", s.Client)
-		return done(t, []string{fmt.Sprintf("No drill-down for %q. Known kinds: policy:, slo:, error:, pubsub:, workflow:, signal:.", ref)})
+		return done(t, []string{fmt.Sprintf("No drill-down for %q. Known kinds: policy:, slo:, error:, pubsub:, workflow:, signal:, job:.", ref)})
 	}
 }
 
@@ -223,4 +226,12 @@ func workflow(ctx context.Context, s source.Scope, file string) Explanation {
 	}
 	header := []string{fmt.Sprintf("# Workflow %s on %s", file, s.Environment.GitHub.Branch), "", fmt.Sprintf("## Runs since %s (%d)", report.Stamp(s.Window.Start), len(lines))}
 	return done(t, append(header, lines...))
+}
+
+func job(ctx context.Context, s source.Scope, name string) Explanation {
+	v, err := component.BuildJob(ctx, s, name)
+	if err != nil {
+		return done(report.NewTracker("jobs", s.Client), []string{err.Error()})
+	}
+	return Explanation{Lines: []string{component.RenderJob(v)}, Report: v.Reports[0]}
 }

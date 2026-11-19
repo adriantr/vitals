@@ -21,11 +21,12 @@ and fractions for `percent` (`0.05` is 5%).
 | `defaults` | map of kind → [defaults](#defaults) | | Signals every service of a kind gets. |
 | `services` | map of name → [service](#services) | | What runs. |
 | `systems` | map of name → [system](#systems) | | Groups of services, plus things that are not services (databases, vendors). |
+| `jobs` | [jobs](#jobs) | | Scheduled and on-demand Cloud Run jobs and workflows, each counting towards a system. |
 | `metrics` | list of [metric](#metrics) | | Extra OTel metrics on component pages. |
 | `logs` | [logs](#logs) | | Optional. Where `explain signal:` reads log patterns from. |
 | `topology` | [topology](#topology) | | Optional repository map. |
 
-A name cannot be both a service and a system.
+A name cannot be both a service and a system, nor a job and either of them.
 
 ## Environments
 
@@ -47,6 +48,7 @@ environments:
 | `github.repo` | `owner/name` | | Repository holding the workflows and releases. |
 | `github.branch` | string | `main` | Branch whose workflow runs count. |
 | `github.workflows` | list of file names | | Deploy workflows, such as `deploy.yml`. A failed latest run is red. |
+| `vars` | map | | Extra placeholder values for [jobs](#jobs): `project` and `logs.filter` may use any var every environment defines, such as `{ batchEnv: dev }` when the batch project's name does not follow the environment's. `env`, `project` and `job` are reserved. |
 
 The environment's name fills `{env}` in signal queries.
 
@@ -178,6 +180,44 @@ systems:
 | `alerts`, `sloServices`, `errors`, `subscriptions` | lists | Claims, as for services. |
 
 A system's status is the worst of its services, its own signals and its own findings.
+
+## Jobs
+
+Cloud Run jobs and Workflows workflows that run on a schedule or on demand. You declare what a job
+is and which system it counts towards; when it runs is read from the Cloud Scheduler jobs that
+target it. [jobs.md](jobs.md) explains the checks, the reads and the IAM they need.
+
+This top-level `jobs` is unrelated to `topology.jobs`, which only lists batch job names for `vitals map`.
+
+```yaml
+jobs:
+  defaults:
+    project: acme-batch-{env}
+    match: 'batch-.*'
+    grace: 1h
+  declared:
+    batch-invoices: { system: billing, description: nightly invoice run }
+    batch-reindex: { system: search, kind: workflow, tolerateFailures: 2 }
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `defaults` | settings plus `match` | | Settings every declared job takes unless it sets its own. |
+| `defaults.match` | regex | | A live Cloud Run job or workflow in the default project whose whole name matches must be declared; `check` reports the ones that are not. Unset, `check` does not look for undeclared jobs. |
+| `declared` | map of name → job | | The jobs. The name is the Cloud Run job or workflow name. |
+| `system` | system name | required | The declared system whose status the job counts towards. |
+| `description` | string | | Shown on the job page. |
+| `kind` | `cloud-run-job` or `workflow` | `cloud-run-job` | What runs the job. |
+| `project` | string | the environment's `gcp.project` | Project that runs the job and its schedulers. `{env}`, `{project}` and the environment's `vars` are filled in. |
+| `region` | string | the environment's `gcp.region` | Region of the job and its schedulers. |
+| `grace` | duration, 0 to `168h` | `30m` | How long after a scheduled time a run may start before the job counts as having missed it. |
+| `tolerateFailures` | integer | `0` | Failed runs in the window that a later success recovered and that stay quiet. One more is amber. |
+| `logs` | `{ filter, sample }` | | The log lines attached to the job's run findings. |
+| `logs.filter` | Logging query | the job's `severity>=ERROR` lines | `{job}`, `{env}`, `{project}` (the job's) and the environment's `vars` are filled in. |
+| `logs.sample` | 1 to 20 | 3 | Lines to attach. |
+
+Every key but `match`, `system` and `description` can be set in `defaults` or on the job; the job wins.
+A job's status is the worst of its findings, and a system's status includes its jobs.
 
 ## Logs
 

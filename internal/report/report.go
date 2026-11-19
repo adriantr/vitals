@@ -52,6 +52,7 @@ const (
 	RefWorkflow     RefKind = "workflow"
 	RefSignal       RefKind = "signal"
 	RefService      RefKind = "service"
+	RefJob          RefKind = "job"
 )
 
 // Ref names a finding's subject as kind:target, e.g. policy:Checkout offline.
@@ -75,9 +76,11 @@ type Finding struct {
 	// neither the signal nor the config says.
 	Owner string `json:"owner,omitempty"`
 	// OwnerIsService is true when Owner is a Cloud Run service from the system map.
-	OwnerIsService bool   `json:"ownerIsService"`
-	Title          string `json:"title"`
-	Detail         string `json:"detail"`
+	OwnerIsService bool `json:"ownerIsService"`
+	// OwnerIsJob is true when Owner is a declared job.
+	OwnerIsJob bool   `json:"ownerIsJob,omitempty"`
+	Title      string `json:"title"`
+	Detail     string `json:"detail"`
 	// When the condition started, if the source knows.
 	Since *time.Time `json:"since,omitempty"`
 	// Chronic findings have held for longer than the window (see thresholds.chronicAlertAge and
@@ -181,6 +184,29 @@ type Snapshot struct {
 	Systems []SystemRow `json:"systems,omitempty"`
 	// Every declared signal's value for its owner.
 	Signals []SignalValue `json:"signals"`
+	// One row per declared job, worst status first.
+	Jobs []JobRow `json:"jobs"`
+}
+
+// JobRow is one declared job at a glance: its schedule and the runs that finished.
+type JobRow struct {
+	Name    string         `json:"name"`
+	Kind    config.JobKind `json:"kind"`
+	System  string         `json:"system"`
+	Project string         `json:"project"`
+	Status  Status         `json:"status"`
+	// The Cloud Scheduler jobs that start it, as cron and time zone, with the state when not
+	// enabled; empty for an on-demand job.
+	Schedules   []string   `json:"schedules"`
+	LastSuccess *time.Time `json:"lastSuccess,omitempty"`
+	LastFailure *time.Time `json:"lastFailure,omitempty"`
+	// Runs that finished in the window, and how many of them failed.
+	Runs   int `json:"runs"`
+	Failed int `json:"failed"`
+	Red    int `json:"red"`
+	Amber  int `json:"amber"`
+	// Of Red and Amber, how many are chronic.
+	Chronic int `json:"chronic"`
 }
 
 // ServiceRow is one declared service at a glance. Nil metrics mean no Cloud Run request data.
@@ -210,6 +236,7 @@ type SystemRow struct {
 	Description string   `json:"description,omitempty"`
 	Status      Status   `json:"status"`
 	Services    int      `json:"services"`
+	Jobs        int      `json:"jobs"`
 	Degraded    []string `json:"degraded"`
 	// Findings owned by the system itself rather than one of its services.
 	Own int `json:"ownFindings"`

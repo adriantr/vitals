@@ -209,6 +209,17 @@ systems:
     description: external payment gateway
     alerts: ['Payment webhook failures']
 
+# Scheduled and on-demand batch jobs. Schedules are read from Cloud Scheduler. See docs/jobs.md.
+jobs:
+  defaults:
+    project: acme-batch-{env}           # where the jobs and their schedulers run
+    match: 'batch-.*'                   # check: every live job named like this must be declared
+    grace: 1h                           # a scheduled run may start this late before it is missed
+  declared:
+    batch-invoices: { system: fulfilment, description: nightly invoice run }
+    batch-catalog-import: { system: search, tolerateFailures: 1 }
+    batch-reconcile: { system: orders-db, kind: workflow }
+
 # Optional: the Log Analytics view `vitals explain signal:` reads top message patterns from, as
 # project.dataset.view of the log bucket's linked BigQuery dataset.
 logs:

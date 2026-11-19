@@ -67,18 +67,22 @@ func Resolve(reports []report.Report, cfg *config.Config, m *topology.Map) {
 				f.Owner = claimed(*f, cfg)
 			}
 			f.OwnerIsService = cfg.IsService(f.Owner)
+			f.OwnerIsJob = cfg.IsJob(f.Owner)
 		}
 	}
 }
 
-// Rollup computes each service's status from its findings and signals, then each system's from its
-// own findings, own signals and its services.
+// Rollup computes each service's and job's status from its findings and signals, then each
+// system's from its own findings, own signals, its services and its jobs.
 func Rollup(cfg *config.Config, findings []report.Finding, values []report.SignalValue) map[string]report.Status {
 	status := map[string]report.Status{}
 	for name := range cfg.Services {
 		status[name] = report.OK
 	}
 	for name := range cfg.Systems {
+		status[name] = report.OK
+	}
+	for name := range cfg.Jobs.Declared {
 		status[name] = report.OK
 	}
 	for _, v := range values {
@@ -92,6 +96,9 @@ func Rollup(cfg *config.Config, findings []report.Finding, values []report.Signa
 	for name, sys := range cfg.Systems {
 		for _, svc := range sys.Services {
 			status[name] = status[name].Worse(status[svc])
+		}
+		for _, job := range cfg.JobsOf(name) {
+			status[name] = status[name].Worse(status[job])
 		}
 	}
 	return status
@@ -153,10 +160,11 @@ func Systems(cfg *config.Config, findings []report.Finding, status map[string]re
 	var rows []report.SystemRow
 	for _, name := range slices.Sorted(maps.Keys(cfg.Systems)) {
 		sys := cfg.Systems[name]
-		row := report.SystemRow{Name: name, Description: sys.Description, Status: status[name], Services: len(sys.Services)}
-		for _, svc := range sys.Services {
-			if st := status[svc]; st.Breach() {
-				row.Degraded = append(row.Degraded, svc+" "+string(st))
+		jobs := cfg.JobsOf(name)
+		row := report.SystemRow{Name: name, Description: sys.Description, Status: status[name], Services: len(sys.Services), Jobs: len(jobs)}
+		for _, member := range slices.Concat(sys.Services, jobs) {
+			if st := status[member]; st.Breach() {
+				row.Degraded = append(row.Degraded, member+" "+string(st))
 			}
 		}
 		for _, f := range findings {
@@ -176,5 +184,34 @@ func Systems(cfg *config.Config, findings []report.Finding, status map[string]re
 		rows = append(rows, report.SystemRow{Name: "unowned", Status: report.Amber, Own: unowned, Description: "findings no declared service or system claims"})
 	}
 	slices.SortStableFunc(rows, func(a, b report.SystemRow) int { return report.WorstFirst(a.Status, b.Status) })
+	return rows
+}
+
+// JobRows builds one row per declared job from what was read and judged; worst status first.
+func JobRows(est source.JobEstate, verdicts []source.JobVerdict, status map[string]report.Status) []report.JobRow {
+	rows := make([]report.JobRow, 0, len(est.States))
+	for i, st := range est.States {
+		v := verdicts[i]
+		row := report.JobRow{
+			Name: st.Job.Name, Kind: st.Job.Kind, System: st.Job.System, Project: string(st.Job.Project),
+			Status: status[st.Job.Name], Schedules: []string{}, LastSuccess: v.LastSuccess, LastFailure: v.LastFailure,
+			Runs: v.Runs, Failed: v.Failed,
+		}
+		for _, sc := range st.Schedules {
+			row.Schedules = append(row.Schedules, source.ScheduleText(sc))
+		}
+		for _, f := range v.Findings {
+			if f.Level == report.Red {
+				row.Red++
+			} else {
+				row.Amber++
+			}
+			if f.Chronic {
+				row.Chronic++
+			}
+		}
+		rows = append(rows, row)
+	}
+	slices.SortStableFunc(rows, func(a, b report.JobRow) int { return report.WorstFirst(a.Status, b.Status) })
 	return rows
 }

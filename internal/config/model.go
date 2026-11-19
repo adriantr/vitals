@@ -330,6 +330,7 @@ func (c *Config) validate() error {
 			}
 		}
 	}
+	problems = append(problems, c.validateJobs()...)
 	if view := c.Logs.AnalyticsView; view != "" {
 		filled, err := Fill(view, map[string]string{"env": "e", "project": "p"})
 		if err != nil {
